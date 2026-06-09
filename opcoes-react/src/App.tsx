@@ -1,18 +1,25 @@
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import DashboardPage from "./pages/DashboardPage";
+import OperationsPage from "./pages/OperationsPage";
+import CalculatorPage from "./pages/CalculatorPage";
+import SettingsPage from "./pages/SettingsPage";
+
 function App() {
   return (
-    <div
-      style={{
-        background: "red",
-        color: "white",
-        height: "100vh",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        fontSize: "40px",
-      }}
-    >
-      APP FUNCIONANDO
-    </div>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+
+        <Route path="/operations" element={<OperationsPage />} />
+
+        <Route path="/calculator" element={<CalculatorPage />} />
+
+        <Route path="/settings" element={<SettingsPage />} />
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 

@@ -31,3 +31,11 @@ a {
   margin-bottom: 16px;
   color: var(--text-main);
 }
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-top: 20px;
+}
