@@ -1,0 +1,43 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+}
+
+.sidebar {
+  width: 230px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar a {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.sidebar a.active {
+  background: var(--primary);
+  color: white;
+}
+
+.content {
+  flex: 1;
+}
+
+.header {
+  height: 72px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  display: flex;
+  align-items: center;
+  padding: 0 32px;
+}
+
+main {
+  padding: 32px;
+}
