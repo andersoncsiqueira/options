@@ -51,7 +51,9 @@ const createId = () =>
   `leg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const parseDecimal = (value: string | number) => {
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
 
   const normalized = value.replace(",", ".").trim();
   const parsed = Number(normalized);
@@ -97,6 +99,14 @@ const formatCurrency = (value: number) =>
     currency: "BRL",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0);
+
+const formatOptionCurrency = (value: number) =>
+  new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
   }).format(Number.isFinite(value) ? value : 0);
 
 const formatNumber = (value: number, digits = 2) =>
@@ -210,6 +220,76 @@ function blackScholes(params: {
   };
 }
 
+function calculateImpliedVolatility(params: {
+  spot: number;
+  strike: number;
+  marketPremium: number;
+  riskFreeRate: number;
+  dividendYield: number;
+  daysToExpiration: number;
+  type: OptionType;
+}) {
+  const {
+    spot,
+    strike,
+    marketPremium,
+    riskFreeRate,
+    dividendYield,
+    daysToExpiration,
+    type,
+  } = params;
+
+  const safeSpot = Math.max(spot, 0);
+  const safeStrike = Math.max(strike, 0);
+  const safeMarketPremium = Math.max(marketPremium, 0);
+
+  if (safeMarketPremium <= 0 || safeSpot <= 0 || safeStrike <= 0) {
+    return null;
+  }
+
+  const intrinsicValue =
+    type === "CALL"
+      ? Math.max(safeSpot - safeStrike, 0)
+      : Math.max(safeStrike - safeSpot, 0);
+
+  if (safeMarketPremium < intrinsicValue) {
+    return null;
+  }
+
+  let lowVol = 0.0001;
+  let highVol = 5;
+  const tolerance = 0.0001;
+  const maxIterations = 100;
+
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    const midVol = (lowVol + highVol) / 2;
+
+    const result = blackScholes({
+      spot: safeSpot,
+      strike: safeStrike,
+      volatility: midVol,
+      riskFreeRate,
+      dividendYield,
+      daysToExpiration,
+      type,
+    });
+
+    const difference = result.price - safeMarketPremium;
+
+    if (Math.abs(difference) < tolerance) {
+      return midVol;
+    }
+
+    if (result.price > safeMarketPremium) {
+      highVol = midVol;
+    } else {
+      lowVol = midVol;
+    }
+  }
+
+  return (lowVol + highVol) / 2;
+}
+
 function getPremiumStatus(
   marketPremium: number,
   theoreticalPremium: number,
@@ -219,7 +299,9 @@ function getPremiumStatus(
   const differencePercent =
     ((marketPremium - theoreticalPremium) / safeTheoretical) * 100;
 
-  if (Math.abs(differencePercent) <= fairThresholdPercent) return "FAIR";
+  if (Math.abs(differencePercent) <= fairThresholdPercent) {
+    return "FAIR";
+  }
 
   return differencePercent < 0 ? "CHEAP" : "EXPENSIVE";
 }
@@ -233,9 +315,12 @@ function getOperationStatus(params: {
     params;
 
   const base = Math.max(Math.abs(theoreticalEntryDebit), 1);
-  const differencePercent = ((marketEntryDebit - theoreticalEntryDebit) / base) * 100;
+  const differencePercent =
+    ((marketEntryDebit - theoreticalEntryDebit) / base) * 100;
 
-  if (Math.abs(differencePercent) <= fairThresholdPercent) return "FAIR";
+  if (Math.abs(differencePercent) <= fairThresholdPercent) {
+    return "FAIR";
+  }
 
   return differencePercent < 0 ? "CHEAP" : "EXPENSIVE";
 }
@@ -572,6 +657,16 @@ export default function CalculatorPage() {
         type: leg.type,
       });
 
+      const impliedVolatility = calculateImpliedVolatility({
+        spot: parsedSpot,
+        strike: leg.strike || parsedSpot,
+        marketPremium: leg.marketPremium,
+        riskFreeRate: parsedRiskFreeRate / 100,
+        dividendYield: parsedDividendYield / 100,
+        daysToExpiration,
+        type: leg.type,
+      });
+
       const difference = leg.marketPremium - bs.price;
       const differencePercent =
         bs.price > 0.0001 ? (difference / bs.price) * 100 : 0;
@@ -588,6 +683,7 @@ export default function CalculatorPage() {
       return {
         leg,
         bs,
+        impliedVolatility,
         difference,
         differencePercent,
         status,
@@ -745,6 +841,29 @@ export default function CalculatorPage() {
     setLastCalculatedAt(new Date());
   };
 
+  const useImpliedVolatilityInLeg = (id: string) => {
+  const valuation = valuationByLeg.find((item) => item.leg.id === id);
+
+  if (!valuation || valuation.impliedVolatility === null) return;
+
+  const impliedVolatility = valuation.impliedVolatility;
+
+  setLegs((currentLegs) =>
+    currentLegs.map((leg) =>
+      leg.id === id
+        ? {
+            ...leg,
+            volatility: (impliedVolatility * 100)
+              .toFixed(2)
+              .replace(".", ","),
+          }
+        : leg
+    )
+  );
+
+  setLastCalculatedAt(new Date());
+};
+
   const applyDefaultVolatilityToAllLegs = () => {
     setLegs((currentLegs) =>
       currentLegs.map((leg) => ({
@@ -764,8 +883,9 @@ export default function CalculatorPage() {
             <p style={styles.eyebrow}>Options Terminal</p>
             <h1 style={styles.title}>Calculadora de Opções</h1>
             <p style={styles.subtitle}>
-              Compare o prêmio atual da opção contra Black-Scholes e descubra se
-              a opção ou a estrutura está barata, cara ou justa.
+              Compare o prêmio atual da opção contra Black-Scholes, calcule a
+              volatilidade implícita e veja se a opção ou a estrutura está
+              barata, cara ou justa.
             </p>
           </div>
 
@@ -781,7 +901,11 @@ export default function CalculatorPage() {
               </span>
             )}
 
-            <button style={styles.primaryButton} type="button" onClick={recalculate}>
+            <button
+              style={styles.primaryButton}
+              type="button"
+              onClick={recalculate}
+            >
               Recalcular
             </button>
 
@@ -814,7 +938,9 @@ export default function CalculatorPage() {
                   style={styles.input}
                   value={asset}
                   placeholder="PETR4"
-                  onChange={(event) => setAsset(event.target.value.toUpperCase())}
+                  onChange={(event) =>
+                    setAsset(event.target.value.toUpperCase())
+                  }
                 />
               </label>
 
@@ -894,7 +1020,9 @@ export default function CalculatorPage() {
                   inputMode="decimal"
                   value={fairValueThreshold}
                   placeholder="Ex: 5"
-                  onChange={(event) => setFairValueThreshold(event.target.value)}
+                  onChange={(event) =>
+                    setFairValueThreshold(event.target.value)
+                  }
                 />
               </label>
 
@@ -969,7 +1097,9 @@ export default function CalculatorPage() {
                 <strong style={styles.metricValue}>
                   {formatCurrency(summary.maxProfit)}
                 </strong>
-                <small style={styles.metricHint}>Dentro da faixa do gráfico</small>
+                <small style={styles.metricHint}>
+                  Dentro da faixa do gráfico
+                </small>
               </div>
 
               <div style={styles.metricBox}>
@@ -977,7 +1107,9 @@ export default function CalculatorPage() {
                 <strong style={styles.metricValue}>
                   {formatCurrency(summary.maxLoss)}
                 </strong>
-                <small style={styles.metricHint}>Dentro da faixa do gráfico</small>
+                <small style={styles.metricHint}>
+                  Dentro da faixa do gráfico
+                </small>
               </div>
             </div>
 
@@ -1012,8 +1144,8 @@ export default function CalculatorPage() {
             <div>
               <h2 style={styles.cardTitle}>Pernas da operação</h2>
               <p style={styles.sectionText}>
-                Aqui você informa o prêmio atual da opção e o sistema calcula o
-                preço teórico por Black-Scholes.
+                Aqui você informa o prêmio atual da opção. O sistema calcula o
+                preço teórico e a volatilidade implícita.
               </p>
             </div>
 
@@ -1026,7 +1158,11 @@ export default function CalculatorPage() {
                 Usar BS em todas
               </button>
 
-              <button style={styles.primaryButton} type="button" onClick={addLeg}>
+              <button
+                style={styles.primaryButton}
+                type="button"
+                onClick={addLeg}
+              >
                 + Adicionar perna
               </button>
             </div>
@@ -1034,9 +1170,18 @@ export default function CalculatorPage() {
 
           <div style={styles.legsList}>
             {valuationByLeg.map((item) => {
-              const { leg, bs, difference, differencePercent, status } = item;
+              const {
+                leg,
+                bs,
+                impliedVolatility,
+                difference,
+                differencePercent,
+                status,
+              } = item;
 
-              const editableLeg = legs.find((currentLeg) => currentLeg.id === leg.id);
+              const editableLeg = legs.find(
+                (currentLeg) => currentLeg.id === leg.id
+              );
 
               if (!editableLeg) return null;
 
@@ -1053,12 +1198,14 @@ export default function CalculatorPage() {
                   <div style={styles.legTopLine}>
                     <div>
                       <strong>
-                        {leg.optionCode || "Sem código"} · {getSideLabel(leg.side)}{" "}
-                        de {getTypeLabel(leg.type)}
+                        {leg.optionCode || "Sem código"} ·{" "}
+                        {getSideLabel(leg.side)} de {getTypeLabel(leg.type)}
                       </strong>
+
                       <p style={styles.legSubtitle}>
-                        {leg.asset || asset} · Strike {formatCurrency(leg.strike)} ·{" "}
-                        {leg.quantity} contrato(s)
+                        {leg.asset || asset} · Strike{" "}
+                        {formatCurrency(leg.strike)} · {leg.quantity}{" "}
+                        contrato(s)
                       </p>
                     </div>
 
@@ -1170,7 +1317,7 @@ export default function CalculatorPage() {
                     </label>
 
                     <label style={styles.label}>
-                      Volatilidade da opção %
+                      Volatilidade usada %
                       <input
                         style={styles.input}
                         type="text"
@@ -1202,7 +1349,7 @@ export default function CalculatorPage() {
                     <div style={styles.metricBox}>
                       <span style={styles.metricLabel}>Prêmio mercado</span>
                       <strong style={styles.metricValue}>
-                        {formatCurrency(leg.marketPremium)}
+                        {formatOptionCurrency(leg.marketPremium)}
                       </strong>
                       <small style={styles.metricHint}>
                         Preço atual da opção informado por você
@@ -1212,17 +1359,31 @@ export default function CalculatorPage() {
                     <div style={styles.metricBox}>
                       <span style={styles.metricLabel}>Preço teórico BS</span>
                       <strong style={styles.metricValue}>
-                        {formatCurrency(bs.price)}
+                        {formatOptionCurrency(bs.price)}
                       </strong>
                       <small style={styles.metricHint}>
-                        Valor calculado pelo modelo
+                        Calculado com a volatilidade usada
+                      </small>
+                    </div>
+
+                    <div style={styles.metricBox}>
+                      <span style={styles.metricLabel}>
+                        Volatilidade implícita
+                      </span>
+                      <strong style={styles.metricValue}>
+                        {impliedVolatility !== null
+                          ? formatPercent(impliedVolatility)
+                          : "Não calculada"}
+                      </strong>
+                      <small style={styles.metricHint}>
+                        Extraída do prêmio de mercado
                       </small>
                     </div>
 
                     <div style={styles.metricBox}>
                       <span style={styles.metricLabel}>Diferença</span>
                       <strong style={styles.metricValue}>
-                        {formatCurrency(difference)}
+                        {formatOptionCurrency(difference)}
                       </strong>
                       <small style={styles.metricHint}>
                         {formatNumber(differencePercent, 2)}%
@@ -1235,8 +1396,8 @@ export default function CalculatorPage() {
                         Δ {bs.delta.toFixed(3)} · Γ {bs.gamma.toFixed(3)}
                       </strong>
                       <small style={styles.metricHint}>
-                        Vega {formatCurrency(bs.vega)} · Theta{" "}
-                        {formatCurrency(bs.theta)}
+                        Vega {formatOptionCurrency(bs.vega)} · Theta{" "}
+                        {formatOptionCurrency(bs.theta)}
                       </small>
                     </div>
 
@@ -1281,6 +1442,14 @@ export default function CalculatorPage() {
                     </button>
 
                     <button
+                      style={styles.secondaryButton}
+                      type="button"
+                      onClick={() => useImpliedVolatilityInLeg(leg.id)}
+                    >
+                      Usar vol. implícita
+                    </button>
+
+                    <button
                       style={styles.primaryButton}
                       type="button"
                       onClick={recalculate}
@@ -1317,7 +1486,9 @@ export default function CalculatorPage() {
               <span>Ativo: {asset}</span>
               <span>Preço: {formatCurrency(parsedSpot)}</span>
               <span>Taxa: {formatPercent(parsedRiskFreeRate / 100)}</span>
-              <span>Dividendos: {formatPercent(parsedDividendYield / 100)}</span>
+              <span>
+                Dividendos: {formatPercent(parsedDividendYield / 100)}
+              </span>
               <span>Venc.: {daysToExpiration} dias</span>
             </div>
           </div>
