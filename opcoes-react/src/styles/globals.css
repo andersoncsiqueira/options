@@ -1,6 +1,10 @@
 @import "./variables.css";
 @import "./layout.css";
 
+/* =========================
+   RESET / BASE
+========================= */
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -18,17 +22,27 @@ a {
   text-decoration: none;
 }
 
-
-.chart-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-top: 20px;
+button,
+input,
+select {
+  font-family: inherit;
 }
 
-.chart-card h3 {
-  margin-bottom: 16px;
+/* =========================
+   SHARED UTILITIES
+========================= */
+
+.positive {
+  color: var(--success);
+  font-weight: 800;
+}
+
+.negative {
+  color: var(--danger);
+  font-weight: 800;
+}
+
+.neutral {
   color: var(--text-main);
 }
 
@@ -38,4 +52,498 @@ a {
   border-radius: var(--radius);
   padding: 20px;
   margin-top: 20px;
+}
+
+.page-header {
+  margin-bottom: 24px;
+}
+
+.page-header h2 {
+  font-size: 32px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.page-header p {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+/* =========================
+   BUTTONS
+========================= */
+
+.btn-primary,
+.btn-secondary,
+.btn-danger-small {
+  border: none;
+  border-radius: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  padding: 13px 18px;
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.btn-secondary {
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  padding: 13px 18px;
+}
+
+.btn-secondary:hover {
+  border-color: var(--primary);
+}
+
+.btn-danger-small {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  padding: 8px 12px;
+}
+
+.actions-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+/* =========================
+   FORMS
+========================= */
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+input,
+select {
+  width: 100%;
+  min-width: 0;
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 13px 14px;
+  outline: none;
+  font-size: 15px;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+/* =========================
+   METRICS
+========================= */
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.metric-card span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.metric-card strong {
+  font-size: 18px;
+}
+
+/* =========================
+   OPERATION CARD
+========================= */
+
+.operation-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-width: 900px;
+  padding: 20px;
+  margin-top: 20px;
+}
+
+.operation-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+
+.operation-card-header p {
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* =========================
+   PRICING BOXES
+========================= */
+
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.pricing-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.pricing-box span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.pricing-box strong {
+  display: block;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+/* =========================
+   PAYOFF CHART
+========================= */
+
+.chart-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-top: 14px;
+}
+
+.chart-card h3 {
+  margin-bottom: 8px;
+  color: var(--text-main);
+  font-size: 16px;
+}
+
+.payoff-svg {
+  width: 100%;
+  max-height: 180px;
+  display: block;
+}
+
+.chart-zero-line {
+  stroke: #94a3b8;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart-current-line {
+  stroke: #facc15;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.chart-payoff-line {
+  fill: none;
+  stroke: #22c55e;
+  stroke-width: 3;
+}
+
+.chart-label {
+  fill: #9ca3af;
+  font-size: 12px;
+}
+
+.chart-current-text {
+  fill: #facc15;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* =========================
+   STRATEGY SELECTOR
+========================= */
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 20px;
+  margin-top: 30px;
+}
+
+.strategy-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  cursor: pointer;
+  transition: 0.2s;
+  text-align: left;
+}
+
+.strategy-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-3px);
+}
+
+.strategy-card h3 {
+  margin-bottom: 10px;
+}
+
+.strategy-card p {
+  color: var(--text-muted);
+}
+
+/* =========================
+   NEW OPERATION PAGE
+========================= */
+
+.new-operation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 24px;
+  align-items: start;
+}
+
+.builder-panel,
+.preview-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px;
+}
+
+.builder-panel h3,
+.preview-panel h3 {
+  font-size: 22px;
+  margin-bottom: 20px;
+}
+
+.preview-panel {
+  position: sticky;
+  top: 92px;
+}
+
+/* Operation form */
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 20px;
+  margin-bottom: 28px;
+}
+
+/* Leg editor */
+
+.leg-editor {
+  margin-top: 10px;
+}
+
+.leg-editor h3 {
+  margin-bottom: 16px;
+}
+
+.leg-editor-grid {
+  display: grid;
+  grid-template-columns: 140px 120px 1fr 1fr 130px 130px;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 20px;
+}
+
+.add-leg-btn {
+  height: 48px;
+  white-space: nowrap;
+}
+
+/* Leg table */
+
+.empty-box {
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 14px;
+}
+
+.leg-table-wrapper {
+  overflow-x: auto;
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+}
+
+.leg-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+}
+
+.leg-table th,
+.leg-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+  text-align: left;
+  font-size: 14px;
+}
+
+.leg-table th {
+  color: var(--text-muted);
+  font-weight: 700;
+  background: var(--bg-panel);
+}
+
+.leg-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Preview */
+
+.preview-price {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+.preview-price span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.preview-price strong {
+  font-size: 28px;
+  font-weight: 900;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.preview-panel .chart-card {
+  padding: 14px;
+  margin-top: 14px;
+  margin-bottom: 14px;
+}
+
+.preview-panel .chart-card h3 {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.preview-panel .payoff-svg {
+  max-height: 160px;
+}
+
+/* Greeks */
+
+.greeks-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.greeks-grid div {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.greeks-grid span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.greeks-grid strong {
+  font-size: 17px;
+}
+
+/* =========================
+   RESPONSIVE
+========================= */
+
+@media (max-width: 1300px) {
+  .new-operation-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 1100px) {
+  .metrics-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .pricing-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .leg-editor-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .preview-grid,
+  .greeks-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions-row {
+    flex-direction: column;
+  }
+
+  .btn-primary,
+  .btn-secondary {
+    width: 100%;
+  }
 }

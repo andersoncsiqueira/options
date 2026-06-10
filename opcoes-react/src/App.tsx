@@ -4,6 +4,7 @@ import DashboardPage from "./pages/DashboardPage";
 import OperationsPage from "./pages/OperationsPage";
 import CalculatorPage from "./pages/CalculatorPage";
 import SettingsPage from "./pages/SettingsPage";
+import NewOperationPage from "./pages/NewOperationPage";
 
 function App() {
   return (
@@ -11,9 +12,13 @@ function App() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
 
-        <Route path="/operations" element={<OperationsPage />} />
+        <Route path="/portfolio" element={<OperationsPage />} />
+
+        <Route path="/new-operation" element={<NewOperationPage />} />
 
         <Route path="/calculator" element={<CalculatorPage />} />
+
+        <Route path="/simulator" element={<div>Simulador</div>} />
 
         <Route path="/settings" element={<SettingsPage />} />
 

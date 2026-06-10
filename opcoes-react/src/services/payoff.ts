@@ -14,15 +14,26 @@ export function calculateLegPayoffAtPrice(
       ? Math.max(underlyingPrice - leg.strike, 0)
       : Math.max(leg.strike - underlyingPrice, 0);
 
-  const sign = leg.direction === "buy" ? 1 : -1;
+  const directionMultiplier = leg.direction === "buy" ? 1 : -1;
 
-  return (intrinsic - leg.premium) * leg.quantity * sign;
+  return (intrinsic - leg.premium) * leg.quantity * directionMultiplier;
+}
+
+export function calculateOperationPayoffAtPrice(
+  legs: Leg[],
+  underlyingPrice: number
+): number {
+  return legs.reduce((total, leg) => {
+    return total + calculateLegPayoffAtPrice(leg, underlyingPrice);
+  }, 0);
 }
 
 export function generatePayoffPoints(
   legs: Leg[],
   currentUnderlyingPrice: number
 ): PayoffPoint[] {
+  if (legs.length === 0) return [];
+
   const strikes = legs.map((leg) => leg.strike);
 
   const minStrike = Math.min(...strikes);
@@ -31,17 +42,14 @@ export function generatePayoffPoints(
   const minPrice = Math.max(0, minStrike * 0.6);
   const maxPrice = maxStrike * 1.4;
 
-  const steps = 60;
+  const steps = 80;
   const stepSize = (maxPrice - minPrice) / steps;
 
   const points: PayoffPoint[] = [];
 
   for (let i = 0; i <= steps; i++) {
     const price = minPrice + stepSize * i;
-
-    const pnl = legs.reduce((total, leg) => {
-      return total + calculateLegPayoffAtPrice(leg, price);
-    }, 0);
+    const pnl = calculateOperationPayoffAtPrice(legs, price);
 
     points.push({
       price: Number(price.toFixed(2)),
@@ -49,9 +57,10 @@ export function generatePayoffPoints(
     });
   }
 
-  const currentPnl = legs.reduce((total, leg) => {
-    return total + calculateLegPayoffAtPrice(leg, currentUnderlyingPrice);
-  }, 0);
+  const currentPnl = calculateOperationPayoffAtPrice(
+    legs,
+    currentUnderlyingPrice
+  );
 
   points.push({
     price: Number(currentUnderlyingPrice.toFixed(2)),

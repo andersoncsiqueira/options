@@ -1,41 +1,45 @@
 import Layout from "../components/Layout/Layout";
-import PayoffChart from "../components/PayoffChart";
-import { generatePayoffPoints } from "../services/payoff";
-import type { Leg } from "../models/Leg";
+import OperationCard from "../components/OperationCard";
+import { useOperationsStore } from "../store/useOperationsStore";
 
 export default function OperationsPage() {
-  const currentPrice = 100;
+  const operations = useOperationsStore((state) => state.operations);
+  const clearOperations = useOperationsStore((state) => state.clearOperations);
 
-  const legs: Leg[] = [
-    {
-      id: "1",
-      direction: "buy",
-      optionType: "call",
-      underlyingPrice: 100,
-      strike: 100,
-      premium: 5,
-      quantity: 100,
-    },
-    {
-      id: "2",
-      direction: "sell",
-      optionType: "call",
-      underlyingPrice: 100,
-      strike: 110,
-      premium: 2,
-      quantity: 100,
-    },
-  ];
-
-  const payoffData = generatePayoffPoints(legs, currentPrice);
+  const currentPrices: Record<string, number> = {
+    PETR4: 100,
+    VALE3: 60,
+    ITUB4: 35,
+  };
 
   return (
     <Layout>
-      <h2>Operações</h2>
+      <div className="page-header">
+        <h2>💼 Carteira</h2>
+        <p>Acompanhe suas operações salvas.</p>
+      </div>
 
-      <p>Teste: Trava de alta com CALL</p>
+      {operations.length > 0 && (
+        <div className="actions-row">
+          <button className="btn-secondary" onClick={clearOperations}>
+            Limpar carteira
+          </button>
+        </div>
+      )}
 
-      <PayoffChart data={payoffData} currentPrice={currentPrice} />
+      {operations.length === 0 ? (
+        <div className="empty-box">
+          Nenhuma operação salva ainda. Crie uma em “Nova Operação”.
+        </div>
+      ) : (
+        operations.map((operation) => (
+          <OperationCard
+            key={operation.id}
+            operation={operation}
+            currentPrice={currentPrices[operation.symbol] ?? 100}
+          />
+        ))
+      )}
     </Layout>
   );
 }
