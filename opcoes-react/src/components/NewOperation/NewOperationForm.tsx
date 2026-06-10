@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useOperationDraftStore } from "../../store/useOperationDraftStore";
 import { useOperationsStore } from "../../store/useOperationsStore";
 import { useMarketDataStore } from "../../store/useMarketDataStore";
+import { StrategySelector } from "../StrategySelector";
 
 import type { Operation } from "../../models/Operation";
 
@@ -146,6 +147,8 @@ export default function NewOperationForm({ editingId }: Props) {
           />
         </label>
       </div>
+
+      <StrategySelector />
 
       <LegEditor />
 
