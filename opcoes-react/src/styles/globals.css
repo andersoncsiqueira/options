@@ -298,6 +298,51 @@ select:focus {
   margin-top: 30px;
 }
 
+.dashboard-section {
+  margin-top: 26px;
+}
+
+.section-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.section-title-row h3 {
+  font-size: 22px;
+}
+
+.section-title-row span {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.operation-card-pnl {
+  text-align: right;
+  font-size: 18px;
+}
+
+.operation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 12px;
+  padding: 13px 18px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: 0.2s;
+}
+
+.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
 .strategy-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -546,4 +591,153 @@ select:focus {
   .btn-secondary {
     width: 100%;
   }
+}
+
+/* =========================
+   MARKET PRICES PANEL
+========================= */
+
+.market-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-top: 24px;
+}
+
+.market-form {
+  display: grid;
+  grid-template-columns: 160px 160px 180px;
+  gap: 12px;
+  margin: 16px 0 18px;
+}
+
+.market-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.market-row {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  gap: 12px;
+  align-items: center;
+}
+
+.market-row strong {
+  display: block;
+  font-size: 16px;
+}
+
+.market-row span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.market-row input {
+  padding: 9px 10px;
+}
+
+@media (max-width: 800px) {
+  .market-form {
+    grid-template-columns: 1fr;
+  }
+
+  .market-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.operation-card-expanded {
+  max-width: 1100px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.details-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.details-section {
+  margin-top: 18px;
+}
+
+.details-section h4 {
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+
+.operation-card-expanded .payoff-svg {
+  max-height: 260px;
+}
+
+@media (max-width: 1100px) {
+  .details-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 700px) {
+  .details-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .operation-actions {
+    flex-direction: column;
+  }
+}
+
+.risk-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.risk-grid div {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.risk-grid span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.risk-grid strong {
+  font-size: 17px;
+}
+
+.editable-leg-table input,
+.editable-leg-table select {
+  padding: 8px 10px;
+  font-size: 13px;
+  border-radius: 10px;
+}
+
+.editable-leg-table td {
+  vertical-align: middle;
+}
+
+.editable-leg-table .btn-danger-small {
+  white-space: nowrap;
 }

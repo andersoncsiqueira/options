@@ -1,53 +1,29 @@
 import Layout from "../components/Layout/Layout";
 import MetricCard from "../components/MetricCard";
 import OperationCard from "../components/OperationCard";
-import type { Operation } from "../models/Operation";
+import { useOperationsStore } from "../store/useOperationsStore";
+import { useMarketDataStore } from "../store/useMarketDataStore";
 import { calculatePortfolioMetrics } from "../services/portfolioMetrics";
+import MarketPricesPanel from "../components/MarketPricesPanel";
 
 function formatCurrency(value: number) {
   return `R$ ${value.toFixed(2)}`;
 }
 
 export default function DashboardPage() {
-  const currentPrices: Record<string, number> = {
-  PETR4: 100,
-};
+  const operations = useOperationsStore((state) => state.operations);
+  const removeOperation = useOperationsStore((state) => state.removeOperation);
 
-  const operations: Operation[] = [
-    {
-      id: "op-1",
-      name: "Trava de Alta PETR4",
-      symbol: "PETR4",
-      createdAt: new Date().toISOString(),
-      expirationDate: "2026-07-17",
-      volatility: 0.25,
-      riskFreeRate: 0.05,
-      legs: [
-        {
-          id: "leg-1",
-          direction: "buy",
-          optionType: "call",
-          strike: 100,
-          premium: 5,
-          quantity: 100,
-        },
-        {
-          id: "leg-2",
-          direction: "sell",
-          optionType: "call",
-          strike: 110,
-          premium: 2,
-          quantity: 100,
-        },
-      ],
-    },
-  ];
+  const prices = useMarketDataStore((state) => state.prices);
 
-  const metrics = calculatePortfolioMetrics(operations, currentPrices, 30);
+  const metrics = calculatePortfolioMetrics(operations, prices, 30);
 
   return (
     <Layout>
-      <h2>Dashboard</h2>
+      <div className="page-header">
+        <h2>📈 Dashboard</h2>
+        <p>Resumo da carteira e operações abertas.</p>
+      </div>
 
       <div className="metrics-grid">
         <MetricCard
@@ -69,14 +45,28 @@ export default function DashboardPage() {
 
         <MetricCard label="Vega" value={metrics.vega.toFixed(2)} />
       </div>
+        <MarketPricesPanel />
+      <section className="dashboard-section">
+        <div className="section-title-row">
+          <h3>Operações abertas</h3>
+          <span>{operations.length} operação(ões)</span>
+        </div>
 
-      {operations.map((operation) => (
-        <OperationCard
-          key={operation.id}
-          operation={operation}
-          currentPrice={currentPrices[operation.symbol]}
-        />
-      ))}
+        {operations.length === 0 ? (
+          <div className="empty-box">
+            Nenhuma operação salva ainda. Crie uma em “Nova Operação”.
+          </div>
+        ) : (
+          operations.map((operation) => (
+            <OperationCard
+              key={operation.id}
+              operation={operation}
+              currentPrice={prices[operation.symbol] ?? 100}
+              onDelete={removeOperation}
+            />
+          ))
+        )}
+      </section>
     </Layout>
   );
 }

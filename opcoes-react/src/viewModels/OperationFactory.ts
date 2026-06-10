@@ -1,13 +1,14 @@
 import type { Operation } from "../models/Operation";
 import type { OperationViewModel } from "./OperationViewModel";
 
-import {
-  calculateOperationMispricing,
-} from "../services/operationPricing";
+import { calculateOperationMispricing } from "../services/operationPricing";
 
 import {
   calculateOperationPayoffAtPrice,
   generatePayoffPoints,
+  calculateMaxProfit,
+  calculateMaxLoss,
+  calculateBreakEvens,
 } from "../services/payoff";
 
 import { calculateGreeks } from "../services/blackScholes";
@@ -17,17 +18,15 @@ export function buildOperationViewModel(
   currentPrice: number,
   daysToExpiration: number
 ): OperationViewModel {
-
   const pricing = calculateOperationMispricing(
     operation,
     currentPrice,
     daysToExpiration
   );
 
-  const pnl = calculateOperationPayoffAtPrice(
-    operation.legs,
-    currentPrice
-  );
+  const pnl = calculateOperationPayoffAtPrice(operation.legs, currentPrice);
+
+  const payoff = generatePayoffPoints(operation.legs, currentPrice);
 
   let delta = 0;
   let gamma = 0;
@@ -36,21 +35,13 @@ export function buildOperationViewModel(
   let rho = 0;
 
   operation.legs.forEach((leg) => {
-
     const greeks = calculateGreeks({
-
       optionType: leg.optionType,
-
       S: currentPrice,
-
       K: leg.strike,
-
       T: daysToExpiration / 365,
-
       r: operation.riskFreeRate,
-
       sigma: operation.volatility,
-
     });
 
     const signal = leg.direction === "buy" ? 1 : -1;
@@ -60,11 +51,9 @@ export function buildOperationViewModel(
     theta += greeks.theta * signal * leg.quantity;
     vega += greeks.vega * signal * leg.quantity;
     rho += greeks.rho * signal * leg.quantity;
-
   });
 
   return {
-
     operation,
 
     currentPrice,
@@ -80,24 +69,19 @@ export function buildOperationViewModel(
     pnl,
 
     greeks: {
-
       delta,
-
       gamma,
-
       theta,
-
       vega,
-
       rho,
-
     },
 
-    payoff: generatePayoffPoints(
-      operation.legs,
-      currentPrice
-    ),
+    payoff,
 
+    maxProfit: calculateMaxProfit(payoff, operation.legs),
+
+maxLoss: calculateMaxLoss(payoff, operation.legs),
+
+    breakEvens: calculateBreakEvens(payoff),
   };
-
 }

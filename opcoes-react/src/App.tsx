@@ -16,6 +16,8 @@ function App() {
 
         <Route path="/new-operation" element={<NewOperationPage />} />
 
+        <Route path="/edit-operation/:id" element={<NewOperationPage />} />
+
         <Route path="/calculator" element={<CalculatorPage />} />
 
         <Route path="/simulator" element={<div>Simulador</div>} />

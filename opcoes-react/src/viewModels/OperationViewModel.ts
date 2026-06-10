@@ -8,9 +8,7 @@ export interface OperationViewModel {
   currentPrice: number;
 
   negotiatedValue: number;
-
   theoreticalValue: number;
-
   mispricing: number;
 
   status: "barata" | "cara" | "justa";
@@ -20,4 +18,8 @@ export interface OperationViewModel {
   greeks: Greeks;
 
   payoff: PayoffPoint[];
+
+  maxProfit: number | "ilimitado";
+  maxLoss: number | "ilimitado";
+  breakEvens: number[];
 }

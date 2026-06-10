@@ -1,20 +1,18 @@
 import { useOperationDraftStore } from "../../store/useOperationDraftStore";
+import type { LegDirection, OptionType } from "../../models/Leg";
 
 export default function LegTable() {
   const legs = useOperationDraftStore((state) => state.legs);
   const removeLeg = useOperationDraftStore((state) => state.removeLeg);
+  const updateLeg = useOperationDraftStore((state) => state.updateLeg);
 
   if (legs.length === 0) {
-    return (
-      <div className="empty-box">
-        Nenhuma perna adicionada ainda.
-      </div>
-    );
+    return <div className="empty-box">Nenhuma perna adicionada ainda.</div>;
   }
 
   return (
     <div className="leg-table-wrapper">
-      <table className="leg-table">
+      <table className="leg-table editable-leg-table">
         <thead>
           <tr>
             <th>Direção</th>
@@ -29,17 +27,73 @@ export default function LegTable() {
         <tbody>
           {legs.map((leg) => (
             <tr key={leg.id}>
-              <td className={leg.direction === "buy" ? "positive" : "negative"}>
-                {leg.direction === "buy" ? "Compra" : "Venda"}
+              <td>
+                <select
+                  value={leg.direction}
+                  className={leg.direction === "buy" ? "positive" : "negative"}
+                  onChange={(e) =>
+                    updateLeg(leg.id, {
+                      direction: e.target.value as LegDirection,
+                    })
+                  }
+                >
+                  <option value="buy">Compra</option>
+                  <option value="sell">Venda</option>
+                </select>
               </td>
 
-              <td>{leg.optionType.toUpperCase()}</td>
+              <td>
+                <select
+                  value={leg.optionType}
+                  onChange={(e) =>
+                    updateLeg(leg.id, {
+                      optionType: e.target.value as OptionType,
+                    })
+                  }
+                >
+                  <option value="call">CALL</option>
+                  <option value="put">PUT</option>
+                </select>
+              </td>
 
-              <td>{leg.strike.toFixed(2)}</td>
+              <td>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={leg.strike}
+                  onChange={(e) =>
+                    updateLeg(leg.id, {
+                      strike: Number(e.target.value),
+                    })
+                  }
+                />
+              </td>
 
-              <td>R$ {leg.premium.toFixed(2)}</td>
+              <td>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={leg.premium}
+                  onChange={(e) =>
+                    updateLeg(leg.id, {
+                      premium: Number(e.target.value),
+                    })
+                  }
+                />
+              </td>
 
-              <td>{leg.quantity}</td>
+              <td>
+                <input
+                  type="number"
+                  step="1"
+                  value={leg.quantity}
+                  onChange={(e) =>
+                    updateLeg(leg.id, {
+                      quantity: Number(e.target.value),
+                    })
+                  }
+                />
+              </td>
 
               <td>
                 <button

@@ -7,6 +7,11 @@ function formatCurrency(value: number) {
   return `R$ ${value.toFixed(2)}`;
 }
 
+function formatRiskValue(value: number | "ilimitado") {
+  if (value === "ilimitado") return "Ilimitado";
+  return formatCurrency(value);
+}
+
 function getDaysToExpiration(expirationDate: string) {
   if (!expirationDate) return 30;
 
@@ -21,7 +26,7 @@ function getDaysToExpiration(expirationDate: string) {
 export default function NewOperationPreview() {
   const draft = useOperationDraftStore();
 
-  const currentPrice = 100;
+  const currentPrice = draft.currentPrice;
   const daysToExpiration = getDaysToExpiration(draft.expirationDate);
 
   const operation: Operation = {
@@ -35,11 +40,7 @@ export default function NewOperationPreview() {
     legs: draft.legs,
   };
 
-  const vm = buildOperationViewModel(
-    operation,
-    currentPrice,
-    daysToExpiration
-  );
+  const vm = buildOperationViewModel(operation, currentPrice, daysToExpiration);
 
   return (
     <aside className="preview-panel">
@@ -50,7 +51,7 @@ export default function NewOperationPreview() {
         <strong>R$ {currentPrice.toFixed(2)}</strong>
       </div>
 
-      <div className="pricing-grid preview-grid">
+      <div className="preview-grid">
         <div className="pricing-box">
           <span>Mercado</span>
           <strong>{formatCurrency(vm.negotiatedValue)}</strong>
@@ -70,11 +71,42 @@ export default function NewOperationPreview() {
 
         <div className="pricing-box">
           <span>Status</span>
-          <strong>{vm.status}</strong>
+          <strong
+            className={
+              vm.status === "barata"
+                ? "positive"
+                : vm.status === "cara"
+                ? "negative"
+                : "neutral"
+            }
+          >
+            {vm.status.toUpperCase()}
+          </strong>
         </div>
       </div>
 
       <PayoffChart data={vm.payoff} currentPrice={vm.currentPrice} />
+
+      <div className="risk-grid">
+        <div>
+          <span>Lucro máximo</span>
+          <strong className="positive">{formatRiskValue(vm.maxProfit)}</strong>
+        </div>
+
+        <div>
+          <span>Prejuízo máximo</span>
+          <strong className="negative">{formatRiskValue(vm.maxLoss)}</strong>
+        </div>
+
+        <div>
+          <span>Break-even</span>
+          <strong>
+            {vm.breakEvens.length > 0
+              ? vm.breakEvens.map((value) => value.toFixed(2)).join(" / ")
+              : "--"}
+          </strong>
+        </div>
+      </div>
 
       <div className="greeks-grid">
         <div>

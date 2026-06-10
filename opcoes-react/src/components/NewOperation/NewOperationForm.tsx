@@ -1,65 +1,88 @@
-import { useOperationsStore } from "../../store/useOperationsStore";
-import type { Operation } from "../../models/Operation";
-import { useOperationDraftStore } from "../../store/useOperationDraftStore";
-import LegEditor from "./LegEditor";
-import LegTable from "./LegTable";
 import { useNavigate } from "react-router-dom";
 
-export default function NewOperationForm() {
-    const addOperation = useOperationsStore((state) => state.addOperation);
-    const legs = useOperationDraftStore((state) => state.legs);
-    const navigate = useNavigate();
+import { useOperationDraftStore } from "../../store/useOperationDraftStore";
+import { useOperationsStore } from "../../store/useOperationsStore";
+import { useMarketDataStore } from "../../store/useMarketDataStore";
+
+import type { Operation } from "../../models/Operation";
+
+import LegEditor from "./LegEditor";
+import LegTable from "./LegTable";
+
+interface Props {
+  editingId?: string;
+}
+
+export default function NewOperationForm({ editingId }: Props) {
+  const navigate = useNavigate();
+
   const {
     name,
     symbol,
     expirationDate,
     volatility,
     riskFreeRate,
+    currentPrice,
     setName,
     setSymbol,
     setExpirationDate,
     setVolatility,
     setRiskFreeRate,
+    setCurrentPrice,
     clear,
   } = useOperationDraftStore();
 
+  const legs = useOperationDraftStore((state) => state.legs);
+
+  const addOperation = useOperationsStore((state) => state.addOperation);
+  const updateOperation = useOperationsStore((state) => state.updateOperation);
+
+  const setPrice = useMarketDataStore((state) => state.setPrice);
+
   function handleSaveOperation() {
-  if (!name.trim()) {
-    alert("Informe o nome da operação.");
-    return;
+    if (!name.trim()) {
+      alert("Informe o nome da operação.");
+      return;
+    }
+
+    if (!symbol.trim()) {
+      alert("Informe o ativo.");
+      return;
+    }
+
+    if (!expirationDate) {
+      alert("Informe o vencimento.");
+      return;
+    }
+
+    if (legs.length === 0) {
+      alert("Adicione pelo menos uma perna.");
+      return;
+    }
+
+    const operation: Operation = {
+      id: editingId ?? crypto.randomUUID(),
+      name,
+      symbol,
+      createdAt: new Date().toISOString(),
+      expirationDate,
+      volatility,
+      riskFreeRate,
+      legs,
+    };
+
+    setPrice(symbol, currentPrice);
+
+    if (editingId) {
+      updateOperation(editingId, operation);
+    } else {
+      addOperation(operation);
+    }
+
+    clear();
+
+    navigate("/portfolio");
   }
-
-  if (!symbol.trim()) {
-    alert("Informe o ativo.");
-    return;
-  }
-
-  if (!expirationDate) {
-    alert("Informe o vencimento.");
-    return;
-  }
-
-  if (legs.length === 0) {
-    alert("Adicione pelo menos uma perna.");
-    return;
-  }
-
-  const operation: Operation = {
-    id: crypto.randomUUID(),
-    name,
-    symbol,
-    createdAt: new Date().toISOString(),
-    expirationDate,
-    volatility,
-    riskFreeRate,
-    legs,
-  };
-
-  addOperation(operation);
-  clear();
-
- navigate("/portfolio");
-}
 
   return (
     <section className="builder-panel">
@@ -81,6 +104,16 @@ export default function NewOperationForm() {
             value={symbol}
             placeholder="PETR4"
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+          />
+        </label>
+
+        <label>
+          Preço atual
+          <input
+            type="number"
+            step="0.01"
+            value={currentPrice}
+            onChange={(e) => setCurrentPrice(Number(e.target.value))}
           />
         </label>
 
@@ -124,7 +157,7 @@ export default function NewOperationForm() {
         </button>
 
         <button className="btn-primary" onClick={handleSaveOperation}>
-  Salvar operação
+          {editingId ? "Salvar alterações" : "Salvar operação"}
         </button>
       </div>
     </section>

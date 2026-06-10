@@ -5,8 +5,10 @@ interface OperationsState {
   operations: Operation[];
 
   addOperation: (operation: Operation) => void;
+  updateOperation: (id: string, operation: Operation) => void;
   removeOperation: (id: string) => void;
   clearOperations: () => void;
+  getOperationById: (id: string) => Operation | undefined;
 }
 
 function loadOperations(): Operation[] {
@@ -25,7 +27,7 @@ function saveOperations(operations: Operation[]) {
   localStorage.setItem("operations", JSON.stringify(operations));
 }
 
-export const useOperationsStore = create<OperationsState>((set) => ({
+export const useOperationsStore = create<OperationsState>((set, get) => ({
   operations: loadOperations(),
 
   addOperation: (operation) =>
@@ -38,9 +40,25 @@ export const useOperationsStore = create<OperationsState>((set) => ({
       };
     }),
 
+  updateOperation: (id, operation) =>
+    set((state) => {
+      const updated = state.operations.map((item) =>
+        item.id === id ? operation : item
+      );
+
+      saveOperations(updated);
+
+      return {
+        operations: updated,
+      };
+    }),
+
   removeOperation: (id) =>
     set((state) => {
-      const updated = state.operations.filter((operation) => operation.id !== id);
+      const updated = state.operations.filter(
+        (operation) => operation.id !== id
+      );
+
       saveOperations(updated);
 
       return {
@@ -56,4 +74,8 @@ export const useOperationsStore = create<OperationsState>((set) => ({
         operations: [],
       };
     }),
+
+  getOperationById: (id) => {
+    return get().operations.find((operation) => operation.id === id);
+  },
 }));

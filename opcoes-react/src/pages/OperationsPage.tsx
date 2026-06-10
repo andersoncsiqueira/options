@@ -1,23 +1,24 @@
 import Layout from "../components/Layout/Layout";
 import OperationCard from "../components/OperationCard";
+import MarketPricesPanel from "../components/MarketPricesPanel";
 import { useOperationsStore } from "../store/useOperationsStore";
+import { useMarketDataStore } from "../store/useMarketDataStore";
 
 export default function OperationsPage() {
   const operations = useOperationsStore((state) => state.operations);
   const clearOperations = useOperationsStore((state) => state.clearOperations);
+  const removeOperation = useOperationsStore((state) => state.removeOperation);
 
-  const currentPrices: Record<string, number> = {
-    PETR4: 100,
-    VALE3: 60,
-    ITUB4: 35,
-  };
+  const prices = useMarketDataStore((state) => state.prices);
 
   return (
     <Layout>
       <div className="page-header">
         <h2>💼 Carteira</h2>
-        <p>Acompanhe suas operações salvas.</p>
+        <p>Acompanhe suas operações salvas e simule os preços dos ativos.</p>
       </div>
+
+      <MarketPricesPanel />
 
       {operations.length > 0 && (
         <div className="actions-row">
@@ -36,7 +37,8 @@ export default function OperationsPage() {
           <OperationCard
             key={operation.id}
             operation={operation}
-            currentPrice={currentPrices[operation.symbol] ?? 100}
+            currentPrice={prices[operation.symbol] ?? 100}
+            onDelete={removeOperation}
           />
         ))
       )}
