@@ -9,6 +9,8 @@ export default function Sidebar() {
 
       <NavLink to="/new-operation">➕ Nova Operação</NavLink>
 
+      <NavLink to="/ativo">📈 Ativo</NavLink>
+
       <NavLink to="/calculator">🧮 Calculadora</NavLink>
 
       <NavLink to="/simulator">📊 Simulador</NavLink>

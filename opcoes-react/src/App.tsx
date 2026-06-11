@@ -5,6 +5,7 @@ import OperationsPage from "./pages/OperationsPage";
 import CalculatorPage from "./pages/CalculatorPage";
 import SettingsPage from "./pages/SettingsPage";
 import NewOperationPage from "./pages/NewOperationPage";
+import AssetAnalysisPage from "./pages/AssetAnalysisPage";
 
 function App() {
   return (
@@ -23,6 +24,8 @@ function App() {
         <Route path="/simulator" element={<div>Simulador</div>} />
 
         <Route path="/settings" element={<SettingsPage />} />
+
+        <Route path="/ativo" element={<AssetAnalysisPage />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

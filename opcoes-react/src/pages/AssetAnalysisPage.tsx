@@ -1,0 +1,594 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+
+import {
+  getHistory,
+  getQuote,
+} from "../services/marketData/marketDataService";
+
+import type {
+  HistoricalCandle,
+  HistoryRange,
+  Quote,
+} from "../services/marketData/marketData.types";
+
+import "../styles/asset-analysis.css";
+
+type Period = "week" | "month" | "year";
+
+type VolatilityPoint = {
+  date: string;
+  volatilityPercent: number;
+  volatilityFinancial: number;
+};
+
+type ImportantDate = {
+  id: string;
+  date: string;
+  title: string;
+  type: "options" | "earnings" | "dividend" | "event";
+  description: string;
+};
+
+type AssetAnalytics = {
+  symbol: string;
+  quote: Quote | null;
+  currentPrice: number;
+  previousPrice: number;
+  dailyChange: number;
+  dailyChangePercent: number;
+  annualizedVolatility: number;
+  candles: HistoricalCandle[];
+  volatilitySeries: VolatilityPoint[];
+  importantDates: ImportantDate[];
+};
+
+function formatCurrency(value: number): string {
+  return value.toLocaleString("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  });
+}
+
+function formatPercent(value: number): string {
+  return `${value.toFixed(2)}%`;
+}
+
+function formatDate(date: string): string {
+  return new Date(date + "T00:00:00").toLocaleDateString("pt-BR");
+}
+
+function getPeriodLabel(period: Period): string {
+  if (period === "week") return "Semana";
+  if (period === "month") return "Mês";
+
+  return "Ano";
+}
+
+function getHistoryRangeByPeriod(period: Period): HistoryRange {
+  if (period === "week") return "1w";
+  if (period === "month") return "1m";
+
+  return "1y";
+}
+
+function average(values: number[]): number {
+  if (values.length === 0) return 0;
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]): number {
+  if (values.length < 2) return 0;
+
+  const avg = average(values);
+
+  const variance =
+    values.reduce((sum, value) => {
+      return sum + Math.pow(value - avg, 2);
+    }, 0) /
+    (values.length - 1);
+
+  return Math.sqrt(variance);
+}
+
+function calculateLogReturns(candles: HistoricalCandle[]): number[] {
+  const returns: number[] = [];
+
+  for (let i = 1; i < candles.length; i++) {
+    const previousClose = candles[i - 1].close;
+    const currentClose = candles[i].close;
+
+    if (previousClose > 0 && currentClose > 0) {
+      returns.push(Math.log(currentClose / previousClose));
+    }
+  }
+
+  return returns;
+}
+
+function calculateAnnualizedVolatility(candles: HistoricalCandle[]): number {
+  const returns = calculateLogReturns(candles);
+  const dailyVolatility = standardDeviation(returns);
+
+  return dailyVolatility * Math.sqrt(252);
+}
+
+function calculateVolatilitySeries(
+  candles: HistoricalCandle[],
+  windowSize = 21
+): VolatilityPoint[] {
+  const result: VolatilityPoint[] = [];
+
+  if (candles.length < windowSize + 1) {
+    return result;
+  }
+
+  for (let i = windowSize; i < candles.length; i++) {
+    const windowCandles = candles.slice(i - windowSize, i + 1);
+
+    const annualizedVolatility =
+      calculateAnnualizedVolatility(windowCandles);
+
+    const close = candles[i].close;
+
+    result.push({
+      date: candles[i].date,
+      volatilityPercent: Number((annualizedVolatility * 100).toFixed(2)),
+      volatilityFinancial: Number((close * annualizedVolatility).toFixed(2)),
+    });
+  }
+
+  return result;
+}
+
+function generateImportantDates(symbol: string): ImportantDate[] {
+  const today = new Date();
+
+  return [
+    {
+      id: "1",
+      date: new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate() + 5
+      )
+        .toISOString()
+        .slice(0, 10),
+      title: "Vencimento de opções",
+      type: "options",
+      description: `Data importante para opções de ${symbol}. Conferir se é série semanal ou mensal.`,
+    },
+    {
+      id: "2",
+      date: new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate() + 12
+      )
+        .toISOString()
+        .slice(0, 10),
+      title: "Possível evento de proventos",
+      type: "dividend",
+      description:
+        "Acompanhar comunicados de dividendos, JCP, data-com e data-ex.",
+    },
+    {
+      id: "3",
+      date: new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate() + 20
+      )
+        .toISOString()
+        .slice(0, 10),
+      title: "Resultado / balanço",
+      type: "earnings",
+      description:
+        "Resultados financeiros podem alterar a volatilidade do ativo e das opções.",
+    },
+    {
+      id: "4",
+      date: new Date(
+        today.getFullYear(),
+        today.getMonth(),
+        today.getDate() + 30
+      )
+        .toISOString()
+        .slice(0, 10),
+      title: "Revisar volatilidade",
+      type: "event",
+      description:
+        "Comparar volatilidade histórica do ativo com volatilidade implícita das opções.",
+    },
+  ];
+}
+
+async function getAssetAnalytics(
+  symbol: string,
+  period: Period
+): Promise<AssetAnalytics> {
+  const cleanSymbol = symbol.trim().toUpperCase();
+  const range = getHistoryRangeByPeriod(period);
+
+  const [quote, candles] = await Promise.all([
+    getQuote(cleanSymbol),
+    getHistory(cleanSymbol, range),
+  ]);
+
+  const lastCandle = candles[candles.length - 1];
+  const previousCandle = candles[candles.length - 2];
+
+  const currentPrice = quote?.price ?? lastCandle?.close ?? 0;
+  const previousPrice = previousCandle?.close ?? currentPrice;
+
+  const dailyChange =
+    quote?.change ?? currentPrice - previousPrice;
+
+  const dailyChangePercent =
+    quote?.changePercent ??
+    (previousPrice ? (dailyChange / previousPrice) * 100 : 0);
+
+  const annualizedVolatility = calculateAnnualizedVolatility(candles);
+
+  const volatilitySeries = calculateVolatilitySeries(candles, 21);
+
+  return {
+    symbol: cleanSymbol,
+    quote,
+    currentPrice,
+    previousPrice,
+    dailyChange,
+    dailyChangePercent,
+    annualizedVolatility,
+    candles,
+    volatilitySeries,
+    importantDates: generateImportantDates(cleanSymbol),
+  };
+}
+
+export default function AssetAnalysisPage() {
+  const [symbol, setSymbol] = useState("PETR4");
+  const [inputSymbol, setInputSymbol] = useState("PETR4");
+  const [period, setPeriod] = useState<Period>("year");
+  const [analytics, setAnalytics] = useState<AssetAnalytics | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  async function loadAssetData(assetSymbol: string, selectedPeriod: Period) {
+    setIsLoading(true);
+    setErrorMessage("");
+
+    try {
+      const data = await getAssetAnalytics(assetSymbol, selectedPeriod);
+
+      setAnalytics(data);
+    } catch (error) {
+      console.error("Erro ao carregar dados do ativo:", error);
+
+      setErrorMessage(
+        "Não foi possível carregar os dados do ativo. Verifique o código digitado."
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadAssetData(symbol, period);
+  }, [symbol, period]);
+
+  const periodVolatility = useMemo(() => {
+    if (!analytics || analytics.candles.length < 2) return 0;
+
+    return calculateAnnualizedVolatility(analytics.candles);
+  }, [analytics]);
+
+  const periodFinancialVolatility = useMemo(() => {
+    if (!analytics) return 0;
+
+    return analytics.currentPrice * periodVolatility;
+  }, [analytics, periodVolatility]);
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+
+    const cleanSymbol = inputSymbol.trim().toUpperCase();
+
+    if (!cleanSymbol) return;
+
+    setSymbol(cleanSymbol);
+  }
+
+  return (
+    <main className="asset-page">
+      <section className="asset-header">
+        <div>
+          <span className="asset-eyebrow">Ativo principal</span>
+
+          <h1>Análise do ativo</h1>
+
+          <p>
+            Histórico de preço, volatilidade percentual, volatilidade financeira
+            e calendário de datas relevantes para operações com opções.
+          </p>
+        </div>
+
+        <form className="asset-search" onSubmit={handleSubmit}>
+          <input
+            value={inputSymbol}
+            onChange={(event) => setInputSymbol(event.target.value)}
+            placeholder="Ex: PETR4"
+          />
+
+          <button type="submit">Buscar</button>
+        </form>
+      </section>
+
+      {isLoading && <div className="asset-loading">Carregando dados...</div>}
+
+      {!isLoading && errorMessage && (
+        <div className="asset-loading">{errorMessage}</div>
+      )}
+
+      {!isLoading && !errorMessage && analytics && (
+        <>
+          <section className="asset-summary-grid">
+            <article className="asset-card">
+              <span>Ativo</span>
+              <strong>{analytics.symbol}</strong>
+            </article>
+
+            <article className="asset-card">
+              <span>Preço atual</span>
+              <strong>{formatCurrency(analytics.currentPrice)}</strong>
+            </article>
+
+            <article className="asset-card">
+              <span>Variação diária</span>
+
+              <strong
+                className={
+                  analytics.dailyChange >= 0 ? "positive" : "negative"
+                }
+              >
+                {analytics.dailyChange >= 0 ? "+" : ""}
+                {formatCurrency(analytics.dailyChange)}
+              </strong>
+
+              <small
+                className={
+                  analytics.dailyChangePercent >= 0
+                    ? "positive"
+                    : "negative"
+                }
+              >
+                {analytics.dailyChangePercent >= 0 ? "+" : ""}
+                {formatPercent(analytics.dailyChangePercent)}
+              </small>
+            </article>
+
+            <article className="asset-card">
+              <span>Volatilidade anualizada</span>
+              <strong>
+                {formatPercent(analytics.annualizedVolatility * 100)}
+              </strong>
+              <small>Baseada no período selecionado</small>
+            </article>
+          </section>
+
+          <section className="asset-period-card">
+            <div>
+              <h2>Período de análise</h2>
+
+              <p>
+                Os gráficos abaixo usam o mesmo período selecionado:
+                semana, mês ou ano.
+              </p>
+            </div>
+
+            <div className="asset-period-buttons">
+              <button
+                type="button"
+                className={period === "week" ? "active" : ""}
+                onClick={() => setPeriod("week")}
+              >
+                Semana
+              </button>
+
+              <button
+                type="button"
+                className={period === "month" ? "active" : ""}
+                onClick={() => setPeriod("month")}
+              >
+                Mês
+              </button>
+
+              <button
+                type="button"
+                className={period === "year" ? "active" : ""}
+                onClick={() => setPeriod("year")}
+              >
+                Ano
+              </button>
+            </div>
+          </section>
+
+          <section className="asset-chart-card">
+            <div className="asset-chart-header">
+              <div>
+                <h2>Histórico do ativo — {getPeriodLabel(period)}</h2>
+
+                <p>
+                  Preço de fechamento diário de {analytics.symbol}.
+                </p>
+              </div>
+            </div>
+
+            <div className="asset-chart-wrapper">
+              <ResponsiveContainer width="100%" height={340}>
+                <AreaChart data={analytics.candles}>
+                  <CartesianGrid strokeDasharray="3 3" />
+
+                  <XAxis dataKey="date" minTickGap={32} />
+
+                  <YAxis
+                    domain={["auto", "auto"]}
+                    tickFormatter={(value) => `R$ ${value}`}
+                  />
+
+                  <Tooltip
+                    formatter={(value) => [
+                      formatCurrency(Number(value)),
+                      "Fechamento",
+                    ]}
+                    labelFormatter={(label) =>
+                      `Data: ${formatDate(String(label))}`
+                    }
+                  />
+
+                  <Area
+                    type="monotone"
+                    dataKey="close"
+                    name="Fechamento"
+                    strokeWidth={2}
+                    fillOpacity={0.2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+
+          <section className="asset-chart-card">
+            <div className="asset-chart-header">
+              <div>
+                <h2>Volatilidade — {getPeriodLabel(period)}</h2>
+
+                <p>
+                  Volatilidade em percentual e em valor financeiro aproximado.
+                </p>
+              </div>
+            </div>
+
+            <div className="asset-vol-summary">
+              <div>
+                <span>Volatilidade percentual no período</span>
+                <strong>{formatPercent(periodVolatility * 100)}</strong>
+              </div>
+
+              <div>
+                <span>Volatilidade financeira estimada</span>
+                <strong>{formatCurrency(periodFinancialVolatility)}</strong>
+              </div>
+            </div>
+
+            <div className="asset-chart-wrapper">
+              {analytics.volatilitySeries.length === 0 ? (
+                <div className="asset-loading">
+                  Não há dados suficientes para calcular volatilidade nesse
+                  período.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={340}>
+                  <LineChart data={analytics.volatilitySeries}>
+                    <CartesianGrid strokeDasharray="3 3" />
+
+                    <XAxis dataKey="date" minTickGap={32} />
+
+                    <YAxis
+                      yAxisId="percent"
+                      orientation="left"
+                      tickFormatter={(value) => `${value}%`}
+                    />
+
+                    <YAxis
+                      yAxisId="financial"
+                      orientation="right"
+                      tickFormatter={(value) => `R$ ${value}`}
+                    />
+
+                    <Tooltip
+                      formatter={(value, name) => {
+                        if (name === "Volatilidade %") {
+                          return [`${Number(value).toFixed(2)}%`, name];
+                        }
+
+                        return [formatCurrency(Number(value)), name];
+                      }}
+                      labelFormatter={(label) =>
+                        `Data: ${formatDate(String(label))}`
+                      }
+                    />
+
+                    <Legend />
+
+                    <Line
+                      yAxisId="percent"
+                      type="monotone"
+                      dataKey="volatilityPercent"
+                      name="Volatilidade %"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+
+                    <Line
+                      yAxisId="financial"
+                      type="monotone"
+                      dataKey="volatilityFinancial"
+                      name="Volatilidade em R$"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </section>
+
+          <section className="asset-calendar-card">
+            <div className="asset-chart-header">
+              <div>
+                <h2>Calendário do ativo</h2>
+
+                <p>
+                  Datas que podem afetar preço, volatilidade e prêmio das
+                  opções.
+                </p>
+              </div>
+            </div>
+
+            <div className="asset-calendar-list">
+              {analytics.importantDates.map((item) => (
+                <article
+                  key={item.id}
+                  className={`asset-calendar-item ${item.type}`}
+                >
+                  <div className="asset-calendar-date">
+                    <strong>{formatDate(item.date)}</strong>
+                    <span>{item.type}</span>
+                  </div>
+
+                  <div>
+                    <h3>{item.title}</h3>
+                    <p>{item.description}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+    </main>
+  );
+}
