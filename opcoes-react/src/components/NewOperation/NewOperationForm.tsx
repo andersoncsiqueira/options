@@ -14,6 +14,11 @@ interface Props {
   editingId?: string;
 }
 
+type LegWithOptionCode = {
+  optionCode?: string;
+  optionSymbol?: string;
+};
+
 export default function NewOperationForm({ editingId }: Props) {
   const navigate = useNavigate();
 
@@ -41,12 +46,15 @@ export default function NewOperationForm({ editingId }: Props) {
   const setPrice = useMarketDataStore((state) => state.setPrice);
 
   function handleSaveOperation() {
-    if (!name.trim()) {
+    const cleanName = name.trim();
+    const cleanSymbol = symbol.trim().toUpperCase();
+
+    if (!cleanName) {
       alert("Informe o nome da operação.");
       return;
     }
 
-    if (!symbol.trim()) {
+    if (!cleanSymbol) {
       alert("Informe o ativo.");
       return;
     }
@@ -61,18 +69,42 @@ export default function NewOperationForm({ editingId }: Props) {
       return;
     }
 
+    const normalizedLegs = legs.map((leg) => {
+      const legWithCode = leg as typeof leg & LegWithOptionCode;
+
+      const cleanOptionCode = (
+        legWithCode.optionCode ??
+        legWithCode.optionSymbol ??
+        ""
+      )
+        .trim()
+        .toUpperCase();
+
+      return {
+        ...leg,
+
+        // mantém compatibilidade com os dois nomes usados no projeto
+        optionCode: cleanOptionCode,
+        optionSymbol: cleanOptionCode,
+
+        strike: Number(leg.strike) || 0,
+        premium: Number(leg.premium) || 0,
+        quantity: Number(leg.quantity) || 0,
+      };
+    });
+
     const operation: Operation = {
       id: editingId ?? crypto.randomUUID(),
-      name,
-      symbol,
+      name: cleanName,
+      symbol: cleanSymbol,
       createdAt: new Date().toISOString(),
       expirationDate,
-      volatility,
-      riskFreeRate,
-      legs,
+      volatility: Number(volatility) || 0,
+      riskFreeRate: Number(riskFreeRate) || 0,
+      legs: normalizedLegs,
     };
 
-    setPrice(symbol, currentPrice);
+    setPrice(cleanSymbol, Number(currentPrice) || 0);
 
     if (editingId) {
       updateOperation(editingId, operation);
@@ -155,11 +187,11 @@ export default function NewOperationForm({ editingId }: Props) {
       <LegTable />
 
       <div className="actions-row">
-        <button className="btn-secondary" onClick={clear}>
+        <button type="button" className="btn-secondary" onClick={clear}>
           Limpar
         </button>
 
-        <button className="btn-primary" onClick={handleSaveOperation}>
+        <button type="button" className="btn-primary" onClick={handleSaveOperation}>
           {editingId ? "Salvar alterações" : "Salvar operação"}
         </button>
       </div>

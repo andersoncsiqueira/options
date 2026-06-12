@@ -118,18 +118,19 @@ export default function LegEditor() {
   }
 
   function handleAddLeg() {
-    const cleanOptionCode = optionCode.trim().toUpperCase();
+  const cleanOptionCode = optionCode.trim().toUpperCase();
 
-    addLeg({
-      id: crypto.randomUUID(),
-      optionCode: cleanOptionCode,
-      direction,
-      optionType,
-      strike,
-      premium,
-      quantity,
-    });
-  }
+  addLeg({
+    id: crypto.randomUUID(),
+    optionCode: cleanOptionCode,
+    optionSymbol: cleanOptionCode,
+    direction,
+    optionType,
+    strike,
+    premium,
+    quantity,
+  } as Parameters<typeof addLeg>[0]);
+}
 
   return (
     <div className="leg-editor">

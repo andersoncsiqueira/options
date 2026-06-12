@@ -7,25 +7,63 @@ import MarketPricesPanel from "../components/MarketPricesPanel";
 import { useOperationsStore } from "../store/useOperationsStore";
 import { getQuote } from "../services/marketData/marketDataService";
 
+type QuotePrices = Record<string, number>;
+
+type LegWithMarketData = {
+  optionSymbol?: string;
+  symbol?: string;
+  code?: string;
+  ticker?: string;
+  lastPrice?: number;
+};
+
+function normalizeSymbol(value: unknown) {
+  if (typeof value !== "string") return "";
+
+  return value.trim().toUpperCase();
+}
+
+function getLegOptionSymbol(leg: LegWithMarketData) {
+  return (
+    normalizeSymbol(leg.optionSymbol) ||
+    normalizeSymbol(leg.symbol) ||
+    normalizeSymbol(leg.code) ||
+    normalizeSymbol(leg.ticker)
+  );
+}
+
 export default function OperationsPage() {
   const operations = useOperationsStore((state) => state.operations);
   const clearOperations = useOperationsStore((state) => state.clearOperations);
-  const removeOperation = useOperationsStore((state) => state.removeOperation);
 
-  const [apiPrices, setApiPrices] = useState<Record<string, number>>({});
+  const [apiPrices, setApiPrices] = useState<QuotePrices>({});
   const [loadingPrices, setLoadingPrices] = useState(false);
   const [pricesError, setPricesError] = useState("");
 
-  const operationSymbols = useMemo(() => {
-    const symbols = operations
-      .map((operation) => operation.symbol?.trim().toUpperCase())
-      .filter((symbol): symbol is string => Boolean(symbol));
+  const quoteSymbols = useMemo(() => {
+    const symbols = new Set<string>();
 
-    return Array.from(new Set(symbols));
+    operations.forEach((operation) => {
+      const operationSymbol = normalizeSymbol(operation.symbol);
+
+      if (operationSymbol) {
+        symbols.add(operationSymbol);
+      }
+
+      operation.legs.forEach((leg) => {
+        const optionSymbol = getLegOptionSymbol(leg as LegWithMarketData);
+
+        if (optionSymbol) {
+          symbols.add(optionSymbol);
+        }
+      });
+    });
+
+    return Array.from(symbols);
   }, [operations]);
 
   useEffect(() => {
-    if (operationSymbols.length === 0) {
+    if (quoteSymbols.length === 0) {
       setApiPrices({});
       return;
     }
@@ -38,7 +76,7 @@ export default function OperationsPage() {
         setPricesError("");
 
         const results = await Promise.all(
-          operationSymbols.map(async (symbol) => {
+          quoteSymbols.map(async (symbol) => {
             try {
               const quote = await getQuote(symbol);
 
@@ -59,10 +97,10 @@ export default function OperationsPage() {
 
         if (cancelled) return;
 
-        const nextPrices: Record<string, number> = {};
+        const nextPrices: QuotePrices = {};
 
         results.forEach((item) => {
-          if (typeof item.price === "number") {
+          if (typeof item.price === "number" && Number.isFinite(item.price)) {
             nextPrices[item.symbol] = item.price;
           }
         });
@@ -72,7 +110,9 @@ export default function OperationsPage() {
         console.error("Erro ao carregar preços das operações:", error);
 
         if (!cancelled) {
-          setPricesError("Não foi possível carregar os preços atuais da API.");
+          setPricesError(
+            "Não foi possível carregar os preços atuais dos ativos e opções pela API."
+          );
         }
       } finally {
         if (!cancelled) {
@@ -86,7 +126,7 @@ export default function OperationsPage() {
     return () => {
       cancelled = true;
     };
-  }, [operationSymbols]);
+  }, [quoteSymbols]);
 
   return (
     <Layout>
@@ -117,13 +157,27 @@ export default function OperationsPage() {
         </div>
       ) : (
         operations.map((operation) => {
-          const symbol = operation.symbol.trim().toUpperCase();
-          const currentPrice = apiPrices[symbol];
+          const operationSymbol = normalizeSymbol(operation.symbol);
+          const currentPrice = apiPrices[operationSymbol];
+
+          const operationWithUpdatedLegPrices = {
+            ...operation,
+            legs: operation.legs.map((leg) => {
+              const optionSymbol = getLegOptionSymbol(leg as LegWithMarketData);
+              const lastPrice = optionSymbol ? apiPrices[optionSymbol] : undefined;
+
+              return {
+                ...leg,
+                optionSymbol,
+                lastPrice,
+              };
+            }),
+          };
 
           return (
             <OperationCard
               key={operation.id}
-              operation={operation}
+              operation={operationWithUpdatedLegPrices}
               currentPrice={currentPrice ?? 0}
             />
           );
