@@ -1,13 +1,32 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useState, type CSSProperties, type FormEvent } from "react";
 
 import Layout from "../components/Layout/Layout";
-import { getQuote } from "../services/marketData/marketDataService";
-import { getOptionBySymbol } from "../services/optionsMarketApi";
+
+import {
+  getAssetQuote,
+  getOptionBySymbol,
+  getOptionsChain,
+} from "../services/optionsMarketApi";
 
 type OptionType = "CALL" | "PUT";
-type OptionTypeInput = OptionType | "";
-
+type OptionTypeFilter = "all" | "call" | "put";
+type ValuationStatus = "CHEAP" | "EXPENSIVE" | "FAIR";
 type ApiRecord = Record<string, unknown>;
+
+type OptionChainItem = {
+  symbol: string;
+  underlying?: string;
+  type: "call" | "put" | "unknown";
+  strike?: number;
+  expirationDate?: string;
+  lastPrice?: number;
+  bid?: number;
+  ask?: number;
+  volume?: number;
+  openInterest?: number;
+  impliedVolatility?: number;
+  raw: unknown;
+};
 
 type BlackScholesResult = {
   price: number;
@@ -15,158 +34,88 @@ type BlackScholesResult = {
   gamma: number;
   vega: number;
   theta: number;
+  rho: number;
   d1: number;
   d2: number;
 };
 
-type CalculationResult = {
-  theoreticalPrice: number | null;
-  impliedVolatility: number | null;
-  difference: number | null;
-  differencePercent: number | null;
-  delta: number | null;
-  gamma: number | null;
-  vega: number | null;
-  theta: number | null;
-  greekSource: string;
-  error: string;
-};
-
-const CALL_SERIES = "ABCDEFGHIJKL";
-const PUT_SERIES = "MNOPQRSTUVWX";
-
-const OPTION_PRICE_KEYS = [
-  "lastPrice",
-  "last",
-  "premium",
-  "marketPremium",
-  "optionPremium",
-  "regularMarketPrice",
-  "close",
-  "bid",
-  "ask",
-  "markPrice",
-  "marketPrice",
-  "ultimoPreco",
-  "precoAtual",
-  "preco",
-  "price",
-];
-
-const STRIKE_KEYS = [
-  "strike",
-  "strikePrice",
-  "exercisePrice",
-  "precoExercicio",
-  "precoDeExercicio",
-];
-
-const EXPIRATION_KEYS = [
-  "expirationDate",
-  "expiration",
-  "maturityDate",
-  "dueDate",
-  "expiresAt",
-  "vencimento",
-  "dataVencimento",
-];
-
-const OPTION_TYPE_KEYS = [
-  "type",
-  "optionType",
-  "kind",
-  "callPut",
-  "right",
-  "tipo",
-];
-
-const UNDERLYING_KEYS = [
-  "underlying",
-  "underlyingSymbol",
-  "underlyingAsset",
-  "asset",
-  "assetSymbol",
-  "stock",
-  "stockSymbol",
-  "tickerAsset",
-  "baseAsset",
-  "ativo",
-];
-
-const UNDERLYING_PRICE_KEYS = [
-  "underlyingPrice",
-  "underlyingLastPrice",
-  "spot",
-  "spotPrice",
-  "assetPrice",
-  "stockPrice",
-  "precoAtivo",
-  "precoAtualAtivo",
-];
+const DEFAULT_ASSET = "PETR4";
+const DEFAULT_RISK_FREE_RATE = "10,5";
+const DEFAULT_VOLATILITY = "35";
+const DEFAULT_DIVIDEND_YIELD = "0";
+const DEFAULT_FAIR_VALUE_THRESHOLD = "5";
+const CONTRACT_SIZE = 100;
 
 function isRecord(value: unknown): value is ApiRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function normalizeCode(value: string) {
-  return value.trim().toUpperCase();
-}
+function readFirst(record: ApiRecord, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = record[key];
 
-function parseDecimal(value: string | number | null | undefined): number | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
   }
 
-  if (typeof value !== "string") return null;
+  return undefined;
+}
 
-  const cleaned = value
+function unwrapObject(raw: unknown): ApiRecord {
+  if (!isRecord(raw)) return {};
+
+  if (isRecord(raw.data)) return raw.data;
+  if (isRecord(raw.option)) return raw.option;
+  if (isRecord(raw.quote)) return raw.quote;
+
+  return raw;
+}
+
+function toText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+
+  const text = String(value).trim();
+
+  return text || undefined;
+}
+
+function toNumber(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  const text = String(value)
     .trim()
-    .replace(/[^\d,.-]/g, "")
-    .replace(/\.(?=\d{3})/g, "")
-    .replace(",", ".");
+    .replace("R$", "")
+    .replace(/\s/g, "");
 
-  if (!cleaned) return null;
+  if (!text) return undefined;
 
-  const parsed = Number(cleaned);
+  const normalized = text.includes(",")
+    ? text.replace(/\./g, "").replace(",", ".")
+    : text;
 
-  return Number.isFinite(parsed) ? parsed : null;
+  const numberValue = Number(normalized);
+
+  return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
-function formatInputNumber(value: number, digits = 2) {
-  return value.toFixed(digits).replace(".", ",");
+function parseDecimal(value: string | number | undefined): number {
+  const parsed = toNumber(value);
+
+  return parsed ?? 0;
 }
 
-function formatCurrency(value: number | null, digits = 2) {
-  if (value === null || !Number.isFinite(value)) return "—";
+function toInputNumber(value: number | undefined): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return "";
 
-  return value.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
+  return String(Number(value.toFixed(6))).replace(".", ",");
 }
 
-function formatPercent(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "—";
-
-  return value.toLocaleString("pt-BR", {
-    style: "percent",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function formatNumber(value: number | null, digits = 2) {
-  if (value === null || !Number.isFinite(value)) return "—";
-
-  return value.toLocaleString("pt-BR", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  });
-}
-
-function todayAsInputDate() {
+function todayAsInputDate(): string {
   const today = new Date();
   const year = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, "0");
@@ -175,28 +124,9 @@ function todayAsInputDate() {
   return `${year}-${month}-${day}`;
 }
 
-function normalizeDateToInput(value: unknown): string {
-  if (typeof value !== "string") return "";
-
-  const cleanValue = value.trim();
-
-  if (!cleanValue) return "";
-
-  const isoMatch = cleanValue.match(/^(\d{4})-(\d{2})-(\d{2})/);
-
-  if (isoMatch) {
-    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-  }
-
-  const brMatch = cleanValue.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-
-  if (brMatch) {
-    return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
-  }
-
-  const date = new Date(cleanValue);
-
-  if (Number.isNaN(date.getTime())) return "";
+function addDaysAsInputDate(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
 
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -205,13 +135,38 @@ function normalizeDateToInput(value: unknown): string {
   return `${year}-${month}-${day}`;
 }
 
-function getDaysToExpiration(expirationDate: string): number | null {
-  if (!expirationDate) return null;
+function normalizeDateForInput(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "";
+
+  if (typeof value === "number") {
+    const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
+    const date = new Date(timestamp);
+
+    if (Number.isNaN(date.getTime())) return "";
+
+    return date.toISOString().slice(0, 10);
+  }
+
+  const text = String(value).trim();
+
+  if (!text) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    return text.slice(0, 10);
+  }
+
+  const date = new Date(text);
+
+  if (Number.isNaN(date.getTime())) return text.slice(0, 10);
+
+  return date.toISOString().slice(0, 10);
+}
+
+function getDaysToExpiration(expirationDate: string): number {
+  if (!expirationDate) return 1;
 
   const today = new Date(`${todayAsInputDate()}T00:00:00`);
   const expiration = new Date(`${expirationDate}T23:59:59`);
-
-  if (Number.isNaN(expiration.getTime())) return null;
 
   const diffMs = expiration.getTime() - today.getTime();
   const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
@@ -219,117 +174,68 @@ function getDaysToExpiration(expirationDate: string): number | null {
   return Math.max(diffDays, 1);
 }
 
-function findValueByKeys(value: unknown, keys: string[], depth = 0): unknown {
-  if (depth > 6) return undefined;
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findValueByKeys(item, keys, depth + 1);
-
-      if (found !== undefined && found !== null && found !== "") {
-        return found;
-      }
-    }
-
-    return undefined;
-  }
-
-  if (!isRecord(value)) return undefined;
-
-  const lowerKeys = keys.map((key) => key.toLowerCase());
-
-  for (const [recordKey, recordValue] of Object.entries(value)) {
-    if (lowerKeys.includes(recordKey.toLowerCase())) {
-      if (
-        recordValue !== undefined &&
-        recordValue !== null &&
-        recordValue !== ""
-      ) {
-        return recordValue;
-      }
-    }
-  }
-
-  const priorityKeys = [
-    "data",
-    "option",
-    "quote",
-    "result",
-    "results",
-    "payload",
-    "body",
-  ];
-
-  for (const key of priorityKeys) {
-    const found = findValueByKeys(value[key], keys, depth + 1);
-
-    if (found !== undefined && found !== null && found !== "") {
-      return found;
-    }
-  }
-
-  for (const nestedValue of Object.values(value)) {
-    const found = findValueByKeys(nestedValue, keys, depth + 1);
-
-    if (found !== undefined && found !== null && found !== "") {
-      return found;
-    }
-  }
-
-  return undefined;
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
-function parseOptionType(value: unknown): OptionTypeInput {
-  if (typeof value !== "string") return "";
-
-  const cleanValue = value.trim().toUpperCase();
-
-  if (cleanValue.includes("CALL") || cleanValue === "C") return "CALL";
-  if (cleanValue.includes("PUT") || cleanValue === "P") return "PUT";
-
-  return "";
+function formatOptionCurrency(value: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
-function inferTypeFromOptionCode(optionCode: string): OptionTypeInput {
-  const cleanCode = normalizeCode(optionCode);
-  const firstDigitIndex = cleanCode.search(/\d/);
-
-  if (firstDigitIndex <= 0) return "";
-
-  const prefix = cleanCode.slice(0, firstDigitIndex);
-  const seriesLetter = prefix.slice(-1);
-
-  if (CALL_SERIES.includes(seriesLetter)) return "CALL";
-  if (PUT_SERIES.includes(seriesLetter)) return "PUT";
-
-  return "";
+function formatNumber(value: number | undefined, digits = 2): string {
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value !== undefined && Number.isFinite(value) ? value : 0);
 }
 
-function inferUnderlyingFromOptionCode(optionCode: string): string {
-  const cleanCode = normalizeCode(optionCode);
-  const firstDigitIndex = cleanCode.search(/\d/);
+function formatInteger(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "-";
 
-  if (firstDigitIndex <= 0) return "";
-
-  const prefix = cleanCode.slice(0, firstDigitIndex);
-  const base = prefix.slice(0, -1);
-
-  const knownUnderlyingMap: Record<string, string> = {
-    PETR: "PETR4",
-    VALE: "VALE3",
-    ITUB: "ITUB4",
-    BBDC: "BBDC4",
-    BBAS: "BBAS3",
-    ABEV: "ABEV3",
-    MGLU: "MGLU3",
-    WEGE: "WEGE3",
-    BOVA: "BOVA11",
-  };
-
-  return knownUnderlyingMap[base] ?? "";
+  return new Intl.NumberFormat("pt-BR").format(value);
 }
 
-const normalCdf = (x: number) => {
+function formatPercent(value: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "percent",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(value) ? value : 0);
+}
+
+function formatPercentFromRaw(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "-";
+
+  const percentValue = value > 1 ? value / 100 : value;
+
+  return formatPercent(percentValue);
+}
+
+function formatDisplayDate(value: string | undefined): string {
+  if (!value) return "-";
+
+  const normalized = normalizeDateForInput(value);
+
+  if (!normalized) return value;
+
+  const date = new Date(`${normalized}T00:00:00`);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("pt-BR");
+}
+
+function normalCdf(x: number): number {
   const sign = x < 0 ? -1 : 1;
   const absX = Math.abs(x) / Math.sqrt(2);
   const t = 1 / (1 + 0.3275911 * absX);
@@ -344,10 +250,11 @@ const normalCdf = (x: number) => {
       Math.exp(-absX * absX));
 
   return 0.5 * (1 + sign * erf);
-};
+}
 
-const normalPdf = (x: number) =>
-  Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+function normalPdf(x: number): number {
+  return Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+}
 
 function blackScholes(params: {
   spot: number;
@@ -416,12 +323,19 @@ function blackScholes(params: {
     rate * safeStrike * Math.exp(-rate * time) * normalCdf(-d2) -
     dividend * safeSpot * Math.exp(-dividend * time) * normalCdf(-d1);
 
+  const rhoCall =
+    (safeStrike * time * Math.exp(-rate * time) * normalCdf(d2)) / 100;
+
+  const rhoPut =
+    (-safeStrike * time * Math.exp(-rate * time) * normalCdf(-d2)) / 100;
+
   return {
     price: Math.max(type === "CALL" ? call : put, 0),
     delta,
     gamma,
     vega,
     theta: (type === "CALL" ? thetaCall : thetaPut) / 365,
+    rho: type === "CALL" ? rhoCall : rhoPut,
     d1,
     d2,
   };
@@ -435,7 +349,7 @@ function calculateImpliedVolatility(params: {
   dividendYield: number;
   daysToExpiration: number;
   type: OptionType;
-}) {
+}): number | null {
   const {
     spot,
     strike,
@@ -446,30 +360,34 @@ function calculateImpliedVolatility(params: {
     type,
   } = params;
 
-  if (spot <= 0 || strike <= 0 || marketPremium <= 0) {
+  const safeSpot = Math.max(spot, 0);
+  const safeStrike = Math.max(strike, 0);
+  const safeMarketPremium = Math.max(marketPremium, 0);
+
+  if (safeMarketPremium <= 0 || safeSpot <= 0 || safeStrike <= 0) {
     return null;
   }
 
   const intrinsicValue =
     type === "CALL"
-      ? Math.max(spot - strike, 0)
-      : Math.max(strike - spot, 0);
+      ? Math.max(safeSpot - safeStrike, 0)
+      : Math.max(safeStrike - safeSpot, 0);
 
-  if (marketPremium < intrinsicValue) {
+  if (safeMarketPremium < intrinsicValue) {
     return null;
   }
 
   let lowVol = 0.0001;
   let highVol = 5;
   const tolerance = 0.0001;
-  const maxIterations = 120;
+  const maxIterations = 100;
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     const midVol = (lowVol + highVol) / 2;
 
     const result = blackScholes({
-      spot,
-      strike,
+      spot: safeSpot,
+      strike: safeStrike,
       volatility: midVol,
       riskFreeRate,
       dividendYield,
@@ -477,13 +395,13 @@ function calculateImpliedVolatility(params: {
       type,
     });
 
-    const difference = result.price - marketPremium;
+    const difference = result.price - safeMarketPremium;
 
     if (Math.abs(difference) < tolerance) {
       return midVol;
     }
 
-    if (result.price > marketPremium) {
+    if (result.price > safeMarketPremium) {
       highVol = midVol;
     } else {
       lowVol = midVol;
@@ -493,286 +411,599 @@ function calculateImpliedVolatility(params: {
   return (lowVol + highVol) / 2;
 }
 
-export default function CalculatorPage() {
-  const [optionCode, setOptionCode] = useState("");
-  const [asset, setAsset] = useState("");
-  const [spot, setSpot] = useState("");
-  const [optionType, setOptionType] = useState<OptionTypeInput>("");
-  const [strike, setStrike] = useState("");
-  const [expirationDate, setExpirationDate] = useState("");
-  const [marketPremium, setMarketPremium] = useState("");
-  const [volatility, setVolatility] = useState("");
-  const [riskFreeRate, setRiskFreeRate] = useState("10,5");
-  const [dividendYield, setDividendYield] = useState("0");
+function inferOptionType(symbol: string, raw?: ApiRecord): "call" | "put" | "unknown" {
+  const explicitType = raw
+    ? toText(
+        readFirst(raw, [
+          "type",
+          "optionType",
+          "option_type",
+          "kind",
+          "side",
+          "callPut",
+        ])
+      )?.toLowerCase()
+    : undefined;
 
-  const [isLoadingOption, setIsLoadingOption] = useState(false);
+  if (explicitType) {
+    if (
+      explicitType.includes("call") ||
+      explicitType.includes("compra") ||
+      explicitType === "c"
+    ) {
+      return "call";
+    }
+
+    if (
+      explicitType.includes("put") ||
+      explicitType.includes("venda") ||
+      explicitType === "p"
+    ) {
+      return "put";
+    }
+  }
+
+  const match = symbol.toUpperCase().match(/^[A-Z]{4}([A-X])/);
+
+  if (!match?.[1]) return "unknown";
+
+  const seriesLetter = match[1];
+
+  if ("ABCDEFGHIJKL".includes(seriesLetter)) return "call";
+  if ("MNOPQRSTUVWX".includes(seriesLetter)) return "put";
+
+  return "unknown";
+}
+
+function optionTypeToUpper(type: "call" | "put" | "unknown"): OptionType {
+  if (type === "put") return "PUT";
+
+  return "CALL";
+}
+
+function normalizeOption(rawOption: unknown): OptionChainItem | null {
+  if (!isRecord(rawOption)) return null;
+
+  const symbol = toText(
+    readFirst(rawOption, [
+      "symbol",
+      "code",
+      "ticker",
+      "optionSymbol",
+      "option_symbol",
+      "optionCode",
+      "option_code",
+      "contractSymbol",
+      "contract_symbol",
+      "asset",
+      "ativo",
+    ])
+  )?.toUpperCase();
+
+  if (!symbol) return null;
+
+  return {
+    symbol,
+    underlying: toText(
+      readFirst(rawOption, [
+        "underlying",
+        "underlyingSymbol",
+        "underlying_symbol",
+        "underlyingAsset",
+        "ativoObjeto",
+        "assetUnderlying",
+      ])
+    )?.toUpperCase(),
+    type: inferOptionType(symbol, rawOption),
+    strike: toNumber(
+      readFirst(rawOption, [
+        "strike",
+        "strikePrice",
+        "strike_price",
+        "exercisePrice",
+        "exercise_price",
+        "precoExercicio",
+        "preco_exercicio",
+      ])
+    ),
+    expirationDate: toText(
+      readFirst(rawOption, [
+        "expirationDate",
+        "expiration_date",
+        "maturityDate",
+        "maturity_date",
+        "dueDate",
+        "due_date",
+        "vencimento",
+      ])
+    ),
+    lastPrice: toNumber(
+      readFirst(rawOption, [
+        "lastPrice",
+        "last_price",
+        "price",
+        "currentPrice",
+        "current_price",
+        "close",
+        "regularMarketPrice",
+        "premium",
+        "premio",
+        "ultimo",
+        "último",
+      ])
+    ),
+    bid: toNumber(
+      readFirst(rawOption, ["bid", "bidPrice", "bid_price", "compra"])
+    ),
+    ask: toNumber(
+      readFirst(rawOption, ["ask", "askPrice", "ask_price", "venda"])
+    ),
+    volume: toNumber(
+      readFirst(rawOption, ["volume", "regularMarketVolume", "volumeNegociado"])
+    ),
+    openInterest: toNumber(
+      readFirst(rawOption, [
+        "openInterest",
+        "open_interest",
+        "oi",
+        "contratosAbertos",
+        "openContracts",
+      ])
+    ),
+    impliedVolatility: toNumber(
+      readFirst(rawOption, [
+        "impliedVolatility",
+        "implied_volatility",
+        "iv",
+        "volatilidadeImplicita",
+        "vol_implicita",
+      ])
+    ),
+    raw: rawOption,
+  };
+}
+
+function extractOptionCandidates(payload: unknown): unknown[] {
+  if (Array.isArray(payload)) return payload;
+
+  if (!isRecord(payload)) return [];
+
+  const candidates: unknown[] = [];
+
+  const arrayKeys = [
+    "data",
+    "options",
+    "results",
+    "items",
+    "contracts",
+    "chain",
+    "optionChain",
+  ];
+
+  for (const key of arrayKeys) {
+    const value = payload[key];
+
+    if (Array.isArray(value)) {
+      candidates.push(...value);
+    }
+  }
+
+  if (Array.isArray(payload.calls)) {
+    candidates.push(
+      ...payload.calls.map((item) =>
+        isRecord(item) ? { ...item, type: item.type ?? "call" } : item
+      )
+    );
+  }
+
+  if (Array.isArray(payload.puts)) {
+    candidates.push(
+      ...payload.puts.map((item) =>
+        isRecord(item) ? { ...item, type: item.type ?? "put" } : item
+      )
+    );
+  }
+
+  if (isRecord(payload.data)) {
+    candidates.push(...extractOptionCandidates(payload.data));
+  }
+
+  if (isRecord(payload.optionChain)) {
+    candidates.push(...extractOptionCandidates(payload.optionChain));
+  }
+
+  return candidates;
+}
+
+function normalizeOptionsPayload(payload: unknown): OptionChainItem[] {
+  const normalized = extractOptionCandidates(payload)
+    .map(normalizeOption)
+    .filter((item): item is OptionChainItem => Boolean(item));
+
+  const uniqueBySymbol = new Map<string, OptionChainItem>();
+
+  for (const option of normalized) {
+    uniqueBySymbol.set(option.symbol, option);
+  }
+
+  return Array.from(uniqueBySymbol.values()).sort((a, b) => {
+    const dateCompare = String(a.expirationDate ?? "").localeCompare(
+      String(b.expirationDate ?? "")
+    );
+
+    if (dateCompare !== 0) return dateCompare;
+
+    return Number(a.strike ?? 0) - Number(b.strike ?? 0);
+  });
+}
+
+function getPremiumFromOption(option: OptionChainItem): number | undefined {
+  if (option.lastPrice !== undefined) return option.lastPrice;
+
+  if (option.bid !== undefined && option.ask !== undefined) {
+    return (option.bid + option.ask) / 2;
+  }
+
+  if (option.ask !== undefined) return option.ask;
+  if (option.bid !== undefined) return option.bid;
+
+  return undefined;
+}
+
+function normalizeQuotePrice(raw: unknown): number | undefined {
+  const data = unwrapObject(raw);
+
+  return toNumber(
+    readFirst(data, [
+      "price",
+      "currentPrice",
+      "current_price",
+      "regularMarketPrice",
+      "regular_market_price",
+      "lastPrice",
+      "last_price",
+      "close",
+    ])
+  );
+}
+
+function getPremiumStatus(
+  marketPremium: number,
+  theoreticalPremium: number,
+  fairThresholdPercent: number
+): ValuationStatus {
+  const safeTheoretical = Math.max(theoreticalPremium, 0.01);
+  const differencePercent =
+    ((marketPremium - theoreticalPremium) / safeTheoretical) * 100;
+
+  if (Math.abs(differencePercent) <= fairThresholdPercent) {
+    return "FAIR";
+  }
+
+  return differencePercent < 0 ? "CHEAP" : "EXPENSIVE";
+}
+
+function getStatusLabel(status: ValuationStatus): string {
+  if (status === "CHEAP") return "Barata";
+  if (status === "EXPENSIVE") return "Cara";
+
+  return "Justa";
+}
+
+function getStatusStyle(status: ValuationStatus): CSSProperties {
+  if (status === "CHEAP") {
+    return {
+      background: "rgba(34, 197, 94, 0.14)",
+      borderColor: "rgba(34, 197, 94, 0.35)",
+      color: "#86efac",
+    };
+  }
+
+  if (status === "EXPENSIVE") {
+    return {
+      background: "rgba(248, 113, 113, 0.14)",
+      borderColor: "rgba(248, 113, 113, 0.35)",
+      color: "#fecaca",
+    };
+  }
+
+  return {
+    background: "rgba(234, 179, 8, 0.14)",
+    borderColor: "rgba(234, 179, 8, 0.35)",
+    color: "#fde68a",
+  };
+}
+
+function getInterpretation(status: ValuationStatus): string {
+  if (status === "CHEAP") {
+    return "O prêmio de mercado está abaixo do preço teórico calculado.";
+  }
+
+  if (status === "EXPENSIVE") {
+    return "O prêmio de mercado está acima do preço teórico calculado.";
+  }
+
+  return "O prêmio de mercado está próximo do preço teórico calculado.";
+}
+
+export default function CalculatorPage() {
+  const [asset, setAsset] = useState(DEFAULT_ASSET);
+  const [assetForChain, setAssetForChain] = useState(DEFAULT_ASSET);
+  const [optionCode, setOptionCode] = useState("");
+  const [optionType, setOptionType] = useState<OptionType>("CALL");
+  const [spot, setSpot] = useState("");
+  const [strike, setStrike] = useState("");
+  const [marketPremium, setMarketPremium] = useState("");
+  const [volatility, setVolatility] = useState(DEFAULT_VOLATILITY);
+  const [riskFreeRate, setRiskFreeRate] = useState(DEFAULT_RISK_FREE_RATE);
+  const [dividendYield, setDividendYield] = useState(DEFAULT_DIVIDEND_YIELD);
+  const [expirationDate, setExpirationDate] = useState(addDaysAsInputDate(30));
+  const [fairValueThreshold, setFairValueThreshold] = useState(
+    DEFAULT_FAIR_VALUE_THRESHOLD
+  );
+  const [quantity, setQuantity] = useState("1");
+
+  const [chainOptions, setChainOptions] = useState<OptionChainItem[]>([]);
+  const [selectedChainSymbol, setSelectedChainSymbol] = useState("");
+  const [typeFilter, setTypeFilter] = useState<OptionTypeFilter>("all");
+  const [textFilter, setTextFilter] = useState("");
+
+  const [isChainLoading, setIsChainLoading] = useState(false);
+  const [isOptionLoading, setIsOptionLoading] = useState(false);
+  const [isQuoteLoading, setIsQuoteLoading] = useState(false);
+
+  const [chainError, setChainError] = useState("");
   const [optionError, setOptionError] = useState("");
-  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
-  const [result, setResult] = useState<CalculationResult | null>(null);
+  const [quoteError, setQuoteError] = useState("");
+  const [lastCalculatedAt, setLastCalculatedAt] = useState<Date | null>(null);
+
+  const parsedSpot = parseDecimal(spot);
+  const parsedStrike = parseDecimal(strike);
+  const parsedMarketPremium = Math.max(parseDecimal(marketPremium), 0);
+  const parsedVolatility = Math.max(parseDecimal(volatility), 0) / 100;
+  const parsedRiskFreeRate = parseDecimal(riskFreeRate) / 100;
+  const parsedDividendYield = parseDecimal(dividendYield) / 100;
+  const parsedFairValueThreshold = parseDecimal(fairValueThreshold);
+  const parsedQuantity = Math.max(Math.floor(parseDecimal(quantity)), 1);
 
   const daysToExpiration = useMemo(
     () => getDaysToExpiration(expirationDate),
     [expirationDate]
   );
 
-  function clearOptionFields() {
-    setAsset("");
-    setSpot("");
-    setOptionType("");
-    setStrike("");
-    setExpirationDate("");
-    setMarketPremium("");
-    setVolatility("");
-    setResult(null);
+  const blackScholesResult = useMemo(() => {
+    return blackScholes({
+      spot: parsedSpot,
+      strike: parsedStrike || parsedSpot || 0.01,
+      volatility: parsedVolatility,
+      riskFreeRate: parsedRiskFreeRate,
+      dividendYield: parsedDividendYield,
+      daysToExpiration,
+      type: optionType,
+    });
+  }, [
+    parsedSpot,
+    parsedStrike,
+    parsedVolatility,
+    parsedRiskFreeRate,
+    parsedDividendYield,
+    daysToExpiration,
+    optionType,
+  ]);
+
+  const impliedVolatility = useMemo(() => {
+    return calculateImpliedVolatility({
+      spot: parsedSpot,
+      strike: parsedStrike,
+      marketPremium: parsedMarketPremium,
+      riskFreeRate: parsedRiskFreeRate,
+      dividendYield: parsedDividendYield,
+      daysToExpiration,
+      type: optionType,
+    });
+  }, [
+    parsedSpot,
+    parsedStrike,
+    parsedMarketPremium,
+    parsedRiskFreeRate,
+    parsedDividendYield,
+    daysToExpiration,
+    optionType,
+  ]);
+
+  const difference = parsedMarketPremium - blackScholesResult.price;
+
+  const differencePercent =
+    blackScholesResult.price > 0.0001
+      ? difference / blackScholesResult.price
+      : 0;
+
+  const valuationStatus = getPremiumStatus(
+    parsedMarketPremium,
+    blackScholesResult.price,
+    parsedFairValueThreshold
+  );
+
+  const totalMarketValue = parsedMarketPremium * parsedQuantity * CONTRACT_SIZE;
+  const totalTheoreticalValue =
+    blackScholesResult.price * parsedQuantity * CONTRACT_SIZE;
+
+  const filteredChainOptions = useMemo(() => {
+    const search = textFilter.trim().toUpperCase();
+
+    return chainOptions.filter((option) => {
+      const matchesType = typeFilter === "all" || option.type === typeFilter;
+
+      const matchesSearch =
+        !search ||
+        option.symbol.includes(search) ||
+        String(option.strike ?? "").includes(search);
+
+      return matchesType && matchesSearch;
+    });
+  }, [chainOptions, typeFilter, textFilter]);
+
+  async function loadAssetQuote(assetSymbol = asset) {
+    const cleanAsset = assetSymbol.trim().toUpperCase();
+
+    if (!cleanAsset) return;
+
+    setIsQuoteLoading(true);
+    setQuoteError("");
+
+    try {
+      const quote = await getAssetQuote(cleanAsset);
+      const price = normalizeQuotePrice(quote);
+
+      if (price !== undefined) {
+        setSpot(toInputNumber(price));
+      } else {
+        setQuoteError("A API respondeu, mas não encontrei o preço do ativo.");
+      }
+    } catch (error) {
+      console.error("Erro ao buscar preço do ativo:", error);
+
+      setQuoteError("Não foi possível buscar o preço atual do ativo.");
+    } finally {
+      setIsQuoteLoading(false);
+    }
   }
 
-  async function handleSearchOption() {
-    const cleanOptionCode = normalizeCode(optionCode);
+  function applyOptionToCalculator(option: OptionChainItem) {
+    const premium = getPremiumFromOption(option);
+    const nextAsset = option.underlying || assetForChain || asset;
 
-    if (!cleanOptionCode) {
-      alert("Informe o código da opção.");
+    setSelectedChainSymbol(option.symbol);
+    setOptionCode(option.symbol);
+    setOptionType(optionTypeToUpper(option.type));
+
+    if (nextAsset) {
+      setAsset(nextAsset);
+      setAssetForChain(nextAsset);
+      void loadAssetQuote(nextAsset);
+    }
+
+    if (option.strike !== undefined) {
+      setStrike(toInputNumber(option.strike));
+    }
+
+    if (option.expirationDate) {
+      const normalizedExpiration = normalizeDateForInput(option.expirationDate);
+
+      if (normalizedExpiration) {
+        setExpirationDate(normalizedExpiration);
+      }
+    }
+
+    if (premium !== undefined) {
+      setMarketPremium(toInputNumber(premium));
+    }
+
+    if (option.impliedVolatility !== undefined) {
+      const normalizedIv =
+        option.impliedVolatility > 1
+          ? option.impliedVolatility
+          : option.impliedVolatility * 100;
+
+      setVolatility(toInputNumber(normalizedIv));
+    }
+
+    setLastCalculatedAt(new Date());
+  }
+
+  async function handleSearchChain(event: FormEvent) {
+    event.preventDefault();
+
+    const cleanAsset = assetForChain.trim().toUpperCase();
+
+    if (!cleanAsset) {
+      setChainError("Digite o código da ação. Exemplo: PETR4.");
       return;
     }
 
+    setIsChainLoading(true);
+    setChainError("");
+    setOptionError("");
+    setChainOptions([]);
+    setSelectedChainSymbol("");
+    setAsset(cleanAsset);
+
     try {
-      setIsLoadingOption(true);
-      setOptionError("");
-      setResult(null);
-      clearOptionFields();
-      setOptionCode(cleanOptionCode);
+      const response = await getOptionsChain(cleanAsset);
+      const normalizedOptions = normalizeOptionsPayload(response);
 
+      setChainOptions(normalizedOptions);
+
+      if (normalizedOptions.length === 0) {
+        setChainError(`Nenhuma opção encontrada para ${cleanAsset}.`);
+      }
+
+      void loadAssetQuote(cleanAsset);
+    } catch (error) {
+      console.error("Erro ao buscar cadeia de opções:", error);
+
+      setChainError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível buscar as opções desse ativo."
+      );
+    } finally {
+      setIsChainLoading(false);
+    }
+  }
+
+  async function handleSearchOptionByCode(event: FormEvent) {
+    event.preventDefault();
+
+    const cleanOptionCode = optionCode.trim().toUpperCase();
+
+    if (!cleanOptionCode) {
+      setOptionError("Digite o código da opção. Exemplo: PETRG424.");
+      return;
+    }
+
+    setIsOptionLoading(true);
+    setOptionError("");
+
+    try {
       const response = await getOptionBySymbol(cleanOptionCode);
+      const normalizedOption = normalizeOption(unwrapObject(response));
 
-      console.log("[CalculatorPage] Dados da opção recebidos:", response);
-
-      const rawAsset = findValueByKeys(response, UNDERLYING_KEYS);
-
-      const foundAssetFromApi =
-        typeof rawAsset === "string" ? rawAsset.trim().toUpperCase() : "";
-
-      const foundAsset =
-        foundAssetFromApi || inferUnderlyingFromOptionCode(cleanOptionCode);
-
-      const foundType =
-        parseOptionType(findValueByKeys(response, OPTION_TYPE_KEYS)) ||
-        inferTypeFromOptionCode(cleanOptionCode);
-
-      const foundStrike = parseDecimal(
-        findValueByKeys(response, STRIKE_KEYS) as string | number | undefined
-      );
-
-      const foundMarketPremium = parseDecimal(
-        findValueByKeys(response, OPTION_PRICE_KEYS) as
-          | string
-          | number
-          | undefined
-      );
-
-      const foundExpirationDate = normalizeDateToInput(
-        findValueByKeys(response, EXPIRATION_KEYS)
-      );
-
-      const foundSpotFromOption = parseDecimal(
-        findValueByKeys(response, UNDERLYING_PRICE_KEYS) as
-          | string
-          | number
-          | undefined
-      );
-
-      let foundSpot = foundSpotFromOption;
-
-      if (foundSpot === null && foundAsset) {
-        try {
-          const quote = await getQuote(foundAsset);
-
-          if (typeof quote?.price === "number") {
-            foundSpot = quote.price;
-          }
-        } catch (error) {
-          console.warn(
-            `[CalculatorPage] Não foi possível buscar preço do ativo ${foundAsset}:`,
-            error
-          );
-        }
+      if (!normalizedOption) {
+        setOptionError("A API respondeu, mas não encontrei os dados da opção.");
+        return;
       }
 
-      setAsset(foundAsset || "");
-      setOptionType(foundType || "");
-      setStrike(foundStrike !== null ? formatInputNumber(foundStrike, 2) : "");
-      setMarketPremium(
-        foundMarketPremium !== null
-          ? formatInputNumber(foundMarketPremium, 2)
-          : ""
-      );
-      setExpirationDate(foundExpirationDate || "");
-      setSpot(foundSpot !== null ? formatInputNumber(foundSpot, 2) : "");
-
-      setLastLoadedAt(new Date());
-
-      if (
-        !foundAsset &&
-        !foundType &&
-        foundStrike === null &&
-        foundMarketPremium === null &&
-        !foundExpirationDate &&
-        foundSpot === null
-      ) {
-        setOptionError(
-          "A API respondeu, mas não encontrei os dados necessários. Preencha manualmente os campos em branco."
-        );
-      }
+      applyOptionToCalculator(normalizedOption);
     } catch (error) {
       console.error("Erro ao buscar opção:", error);
 
       setOptionError(
-        "Não foi possível buscar essa opção pela API. Preencha os dados manualmente."
+        error instanceof Error
+          ? error.message
+          : "Não foi possível buscar os dados da opção."
       );
-
-      setOptionType(inferTypeFromOptionCode(cleanOptionCode));
-      setAsset(inferUnderlyingFromOptionCode(cleanOptionCode));
     } finally {
-      setIsLoadingOption(false);
+      setIsOptionLoading(false);
     }
+  }
+
+  function handleUseImpliedVolatility() {
+    if (impliedVolatility === null) return;
+
+    setVolatility(toInputNumber(impliedVolatility * 100));
+    setLastCalculatedAt(new Date());
   }
 
   function handleCalculate() {
-    const parsedSpot = parseDecimal(spot);
-    const parsedStrike = parseDecimal(strike);
-    const parsedMarketPremium = parseDecimal(marketPremium);
-    const parsedVolatility = parseDecimal(volatility);
-    const parsedRiskFreeRate = parseDecimal(riskFreeRate) ?? 0;
-    const parsedDividendYield = parseDecimal(dividendYield) ?? 0;
-
-    const missingBaseFields: string[] = [];
-
-    if (parsedSpot === null || parsedSpot <= 0) {
-      missingBaseFields.push("preço atual do ativo");
-    }
-
-    if (parsedStrike === null || parsedStrike <= 0) {
-      missingBaseFields.push("strike");
-    }
-
-    if (!optionType) {
-      missingBaseFields.push("tipo da opção");
-    }
-
-    if (daysToExpiration === null) {
-      missingBaseFields.push("vencimento");
-    }
-
-    const canUseBaseFields =
-      missingBaseFields.length === 0 &&
-      parsedSpot !== null &&
-      parsedStrike !== null &&
-      optionType !== "" &&
-      daysToExpiration !== null;
-
-    let theoreticalPrice: number | null = null;
-    let impliedVolatility: number | null = null;
-    let delta: number | null = null;
-    let gamma: number | null = null;
-    let vega: number | null = null;
-    let theta: number | null = null;
-    let greekSource = "";
-    let error = "";
-
-    if (canUseBaseFields) {
-      const safeSpot = parsedSpot as number;
-      const safeStrike = parsedStrike as number;
-      const safeType = optionType as OptionType;
-      const safeDaysToExpiration = daysToExpiration as number;
-
-      if (parsedVolatility !== null && parsedVolatility > 0) {
-        const bs = blackScholes({
-          spot: safeSpot,
-          strike: safeStrike,
-          volatility: parsedVolatility / 100,
-          riskFreeRate: parsedRiskFreeRate / 100,
-          dividendYield: parsedDividendYield / 100,
-          daysToExpiration: safeDaysToExpiration,
-          type: safeType,
-        });
-
-        theoreticalPrice = bs.price;
-        delta = bs.delta;
-        gamma = bs.gamma;
-        vega = bs.vega;
-        theta = bs.theta;
-        greekSource = "Volatilidade usada";
-      }
-
-      if (parsedMarketPremium !== null && parsedMarketPremium > 0) {
-        impliedVolatility = calculateImpliedVolatility({
-          spot: safeSpot,
-          strike: safeStrike,
-          marketPremium: parsedMarketPremium,
-          riskFreeRate: parsedRiskFreeRate / 100,
-          dividendYield: parsedDividendYield / 100,
-          daysToExpiration: safeDaysToExpiration,
-          type: safeType,
-        });
-      }
-
-      if (
-        theoreticalPrice === null &&
-        impliedVolatility !== null &&
-        impliedVolatility > 0
-      ) {
-        const bsByImpliedVolatility = blackScholes({
-          spot: safeSpot,
-          strike: safeStrike,
-          volatility: impliedVolatility,
-          riskFreeRate: parsedRiskFreeRate / 100,
-          dividendYield: parsedDividendYield / 100,
-          daysToExpiration: safeDaysToExpiration,
-          type: safeType,
-        });
-
-        delta = bsByImpliedVolatility.delta;
-        gamma = bsByImpliedVolatility.gamma;
-        vega = bsByImpliedVolatility.vega;
-        theta = bsByImpliedVolatility.theta;
-        greekSource = "Volatilidade implícita";
-      }
-    }
-
-    if (!canUseBaseFields) {
-      error = `Preencha: ${missingBaseFields.join(", ")}.`;
-    } else if (theoreticalPrice === null && impliedVolatility === null) {
-      error =
-        "Para calcular, informe a volatilidade usada ou o prêmio de mercado da opção.";
-    } else if (theoreticalPrice === null) {
-      error =
-        "Preço teórico não calculado porque a volatilidade usada está em branco.";
-    } else if (impliedVolatility === null) {
-      error =
-        "Volatilidade implícita não calculada porque o prêmio de mercado está em branco, zerado ou abaixo do valor intrínseco.";
-    }
-
-    const difference =
-      theoreticalPrice !== null && parsedMarketPremium !== null
-        ? parsedMarketPremium - theoreticalPrice
-        : null;
-
-    const differencePercent =
-      difference !== null && theoreticalPrice !== null && theoreticalPrice > 0
-        ? difference / theoreticalPrice
-        : null;
-
-    setResult({
-      theoreticalPrice,
-      impliedVolatility,
-      difference,
-      differencePercent,
-      delta,
-      gamma,
-      vega,
-      theta,
-      greekSource,
-      error,
-    });
+    setLastCalculatedAt(new Date());
   }
+
+  const hasEnoughData =
+    parsedSpot > 0 &&
+    parsedStrike > 0 &&
+    parsedVolatility > 0 &&
+    daysToExpiration > 0;
 
   return (
     <Layout>
@@ -780,19 +1011,20 @@ export default function CalculatorPage() {
         <section style={styles.headerCard}>
           <div>
             <p style={styles.eyebrow}>Options Terminal</p>
+
             <h1 style={styles.title}>Calculadora de Opções</h1>
+
             <p style={styles.subtitle}>
-              Informe o código da opção, busque os dados disponíveis na API e
-              calcule o preço teórico pelo Black-Scholes, a volatilidade
-              implícita pelo prêmio de mercado e as gregas.
+              Digite o ativo para listar as opções disponíveis, selecione uma
+              opção e calcule preço teórico, volatilidade implícita e gregas.
             </p>
           </div>
 
           <div style={styles.headerActions}>
-            {lastLoadedAt && (
-              <span style={styles.lastLoaded}>
-                Dados carregados às{" "}
-                {lastLoadedAt.toLocaleTimeString("pt-BR", {
+            {lastCalculatedAt && (
+              <span style={styles.lastCalculation}>
+                Atualizado às{" "}
+                {lastCalculatedAt.toLocaleTimeString("pt-BR", {
                   hour: "2-digit",
                   minute: "2-digit",
                   second: "2-digit",
@@ -801,56 +1033,263 @@ export default function CalculatorPage() {
             )}
 
             <button
-              type="button"
               style={styles.primaryButton}
+              type="button"
               onClick={handleCalculate}
             >
               Calcular
             </button>
+
+            <div
+              style={{
+                ...styles.statusBadge,
+                ...getStatusStyle(valuationStatus),
+              }}
+            >
+              Opção {getStatusLabel(valuationStatus)}
+            </div>
           </div>
         </section>
 
         <section style={styles.card}>
           <div style={styles.sectionHeader}>
             <div>
-              <h2 style={styles.cardTitle}>Buscar opção</h2>
+              <h2 style={styles.cardTitle}>Opções disponíveis por ativo</h2>
+
               <p style={styles.sectionText}>
-                Digite o código da opção. Os campos que a API não encontrar
-                ficam em branco para preenchimento manual.
+                Digite o código da ação para puxar a lista de opções e clique em
+                usar para preencher a calculadora.
               </p>
             </div>
           </div>
 
-          <div style={styles.searchRow}>
+          <form style={styles.searchForm} onSubmit={handleSearchChain}>
             <input
               style={styles.searchInput}
-              value={optionCode}
-              placeholder="Ex: PETRG424"
-              onChange={(event) => {
-                setOptionCode(event.target.value.toUpperCase());
-                setResult(null);
-              }}
+              value={assetForChain}
+              onChange={(event) =>
+                setAssetForChain(event.target.value.toUpperCase())
+              }
+              placeholder="Ex: PETR4"
             />
 
             <button
-              type="button"
-              style={{
-                ...styles.primaryButton,
-                opacity: isLoadingOption ? 0.7 : 1,
-              }}
-              onClick={handleSearchOption}
-              disabled={isLoadingOption}
+              style={styles.primaryButton}
+              type="submit"
+              disabled={isChainLoading}
             >
-              {isLoadingOption ? "Buscando..." : "Buscar opção"}
+              {isChainLoading ? "Buscando..." : "Buscar opções"}
             </button>
+          </form>
+
+          {chainError && <div style={styles.errorBox}>{chainError}</div>}
+
+          {chainOptions.length > 0 && (
+            <>
+              <div style={styles.filtersRow}>
+                <select
+                  style={styles.select}
+                  value={typeFilter}
+                  onChange={(event) =>
+                    setTypeFilter(event.target.value as OptionTypeFilter)
+                  }
+                >
+                  <option value="all">Calls e puts</option>
+                  <option value="call">Somente calls</option>
+                  <option value="put">Somente puts</option>
+                </select>
+
+                <input
+                  style={styles.filterInput}
+                  value={textFilter}
+                  onChange={(event) => setTextFilter(event.target.value)}
+                  placeholder="Filtrar por código ou strike"
+                />
+              </div>
+
+              <div style={styles.tableCounter}>
+                {filteredChainOptions.length} opção(ões) encontrada(s)
+              </div>
+
+              <div style={styles.tableWrapper}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Código</th>
+                      <th style={styles.th}>Tipo</th>
+                      <th style={styles.th}>Strike</th>
+                      <th style={styles.th}>Vencimento</th>
+                      <th style={styles.th}>Último</th>
+                      <th style={styles.th}>Bid</th>
+                      <th style={styles.th}>Ask</th>
+                      <th style={styles.th}>Volume</th>
+                      <th style={styles.th}>OI</th>
+                      <th style={styles.th}>IV</th>
+                      <th style={styles.th}></th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filteredChainOptions.map((option) => {
+                      const selected = selectedChainSymbol === option.symbol;
+
+                      return (
+                        <tr
+                          key={option.symbol}
+                          style={selected ? styles.selectedTableRow : undefined}
+                        >
+                          <td style={styles.td}>
+                            <strong style={styles.symbolText}>
+                              {option.symbol}
+                            </strong>
+                          </td>
+
+                          <td style={styles.td}>
+                            <span
+                              style={{
+                                ...styles.optionBadge,
+                                ...(option.type === "call"
+                                  ? styles.callBadge
+                                  : option.type === "put"
+                                  ? styles.putBadge
+                                  : styles.unknownBadge),
+                              }}
+                            >
+                              {option.type === "call"
+                                ? "CALL"
+                                : option.type === "put"
+                                ? "PUT"
+                                : "-"}
+                            </span>
+                          </td>
+
+                          <td style={styles.td}>
+                            {option.strike !== undefined
+                              ? formatCurrency(option.strike)
+                              : "-"}
+                          </td>
+
+                          <td style={styles.td}>
+                            {formatDisplayDate(option.expirationDate)}
+                          </td>
+
+                          <td style={styles.td}>
+                            {option.lastPrice !== undefined
+                              ? formatOptionCurrency(option.lastPrice)
+                              : "-"}
+                          </td>
+
+                          <td style={styles.td}>
+                            {option.bid !== undefined
+                              ? formatOptionCurrency(option.bid)
+                              : "-"}
+                          </td>
+
+                          <td style={styles.td}>
+                            {option.ask !== undefined
+                              ? formatOptionCurrency(option.ask)
+                              : "-"}
+                          </td>
+
+                          <td style={styles.td}>
+                            {formatInteger(option.volume)}
+                          </td>
+
+                          <td style={styles.td}>
+                            {formatInteger(option.openInterest)}
+                          </td>
+
+                          <td style={styles.td}>
+                            {formatPercentFromRaw(option.impliedVolatility)}
+                          </td>
+
+                          <td style={styles.td}>
+                            <button
+                              style={{
+                                ...styles.smallButton,
+                                ...(selected ? styles.successButton : {}),
+                              }}
+                              type="button"
+                              onClick={() => applyOptionToCalculator(option)}
+                            >
+                              {selected ? "Selecionada" : "Usar"}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {filteredChainOptions.length === 0 && (
+                      <tr>
+                        <td style={styles.emptyCell} colSpan={11}>
+                          Nenhuma opção bate com o filtro informado.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+
+        <section style={styles.card}>
+          <div style={styles.sectionHeader}>
+            <div>
+              <h2 style={styles.cardTitle}>Buscar opção pelo código</h2>
+
+              <p style={styles.sectionText}>
+                Também dá para buscar uma opção específica. Os campos que a API
+                não encontrar continuam editáveis.
+              </p>
+            </div>
           </div>
+
+          <form style={styles.searchForm} onSubmit={handleSearchOptionByCode}>
+            <input
+              style={styles.searchInput}
+              value={optionCode}
+              onChange={(event) =>
+                setOptionCode(event.target.value.toUpperCase())
+              }
+              placeholder="Ex: PETRG424"
+            />
+
+            <button
+              style={styles.primaryButton}
+              type="submit"
+              disabled={isOptionLoading}
+            >
+              {isOptionLoading ? "Buscando..." : "Buscar opção"}
+            </button>
+          </form>
 
           {optionError && <div style={styles.errorBox}>{optionError}</div>}
         </section>
 
         <section style={styles.grid}>
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>Dados para o cálculo</h2>
+            <div style={styles.sectionHeader}>
+              <div>
+                <h2 style={styles.cardTitle}>Dados para o cálculo</h2>
+
+                <p style={styles.sectionText}>
+                  Ajuste manualmente qualquer campo que não vier preenchido pela
+                  API.
+                </p>
+              </div>
+
+              <button
+                style={styles.secondaryButton}
+                type="button"
+                onClick={() => void loadAssetQuote(asset)}
+                disabled={isQuoteLoading}
+              >
+                {isQuoteLoading ? "Buscando..." : "Atualizar ativo"}
+              </button>
+            </div>
+
+            {quoteError && <div style={styles.errorBox}>{quoteError}</div>}
 
             <div style={styles.formGrid}>
               <label style={styles.label}>
@@ -858,12 +1297,35 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={asset}
+                  onChange={(event) => setAsset(event.target.value.toUpperCase())}
                   placeholder="Ex: PETR4"
-                  onChange={(event) => {
-                    setAsset(event.target.value.toUpperCase());
-                    setResult(null);
-                  }}
                 />
+              </label>
+
+              <label style={styles.label}>
+                Código da opção
+                <input
+                  style={styles.input}
+                  value={optionCode}
+                  onChange={(event) =>
+                    setOptionCode(event.target.value.toUpperCase())
+                  }
+                  placeholder="Ex: PETRG424"
+                />
+              </label>
+
+              <label style={styles.label}>
+                Tipo
+                <select
+                  style={styles.input}
+                  value={optionType}
+                  onChange={(event) =>
+                    setOptionType(event.target.value as OptionType)
+                  }
+                >
+                  <option value="CALL">CALL</option>
+                  <option value="PUT">PUT</option>
+                </select>
               </label>
 
               <label style={styles.label}>
@@ -871,30 +1333,10 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={spot}
-                  type="text"
                   inputMode="decimal"
-                  placeholder="Ex: 41,76"
-                  onChange={(event) => {
-                    setSpot(event.target.value);
-                    setResult(null);
-                  }}
+                  onChange={(event) => setSpot(event.target.value)}
+                  placeholder="Ex: 40,36"
                 />
-              </label>
-
-              <label style={styles.label}>
-                Tipo da opção
-                <select
-                  style={styles.input}
-                  value={optionType}
-                  onChange={(event) => {
-                    setOptionType(event.target.value as OptionTypeInput);
-                    setResult(null);
-                  }}
-                >
-                  <option value="">Selecione</option>
-                  <option value="CALL">Call</option>
-                  <option value="PUT">Put</option>
-                </select>
               </label>
 
               <label style={styles.label}>
@@ -902,36 +1344,9 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={strike}
-                  type="text"
                   inputMode="decimal"
-                  placeholder="Ex: 42,36"
-                  onChange={(event) => {
-                    setStrike(event.target.value);
-                    setResult(null);
-                  }}
-                />
-              </label>
-
-              <label style={styles.label}>
-                Vencimento
-                <input
-                  style={styles.input}
-                  value={expirationDate}
-                  type="date"
-                  onChange={(event) => {
-                    setExpirationDate(event.target.value);
-                    setResult(null);
-                  }}
-                />
-              </label>
-
-              <label style={styles.label}>
-                Dias até o vencimento
-                <input
-                  style={{ ...styles.input, opacity: 0.7 }}
-                  value={daysToExpiration ?? ""}
-                  readOnly
-                  placeholder="Automático"
+                  onChange={(event) => setStrike(event.target.value)}
+                  placeholder="Ex: 42,00"
                 />
               </label>
 
@@ -940,13 +1355,28 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={marketPremium}
-                  type="text"
                   inputMode="decimal"
-                  placeholder="Ex: 1,85"
-                  onChange={(event) => {
-                    setMarketPremium(event.target.value);
-                    setResult(null);
-                  }}
+                  onChange={(event) => setMarketPremium(event.target.value)}
+                  placeholder="Ex: 1,25"
+                />
+              </label>
+
+              <label style={styles.label}>
+                Vencimento
+                <input
+                  style={styles.input}
+                  type="date"
+                  value={expirationDate}
+                  onChange={(event) => setExpirationDate(event.target.value)}
+                />
+              </label>
+
+              <label style={styles.label}>
+                Dias até o vencimento
+                <input
+                  style={{ ...styles.input, opacity: 0.72 }}
+                  value={daysToExpiration}
+                  readOnly
                 />
               </label>
 
@@ -955,13 +1385,9 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={volatility}
-                  type="text"
                   inputMode="decimal"
+                  onChange={(event) => setVolatility(event.target.value)}
                   placeholder="Ex: 35"
-                  onChange={(event) => {
-                    setVolatility(event.target.value);
-                    setResult(null);
-                  }}
                 />
               </label>
 
@@ -970,13 +1396,9 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={riskFreeRate}
-                  type="text"
                   inputMode="decimal"
+                  onChange={(event) => setRiskFreeRate(event.target.value)}
                   placeholder="Ex: 10,5"
-                  onChange={(event) => {
-                    setRiskFreeRate(event.target.value);
-                    setResult(null);
-                  }}
                 />
               </label>
 
@@ -985,160 +1407,201 @@ export default function CalculatorPage() {
                 <input
                   style={styles.input}
                   value={dividendYield}
-                  type="text"
                   inputMode="decimal"
+                  onChange={(event) => setDividendYield(event.target.value)}
                   placeholder="Ex: 0"
-                  onChange={(event) => {
-                    setDividendYield(event.target.value);
-                    setResult(null);
-                  }}
+                />
+              </label>
+
+              <label style={styles.label}>
+                Quantidade de contratos
+                <input
+                  style={styles.input}
+                  value={quantity}
+                  type="number"
+                  min="1"
+                  step="1"
+                  onChange={(event) => setQuantity(event.target.value)}
+                />
+              </label>
+
+              <label style={styles.label}>
+                Margem para considerar justo %
+                <input
+                  style={styles.input}
+                  value={fairValueThreshold}
+                  inputMode="decimal"
+                  onChange={(event) =>
+                    setFairValueThreshold(event.target.value)
+                  }
+                  placeholder="Ex: 5"
                 />
               </label>
             </div>
 
-            <div style={styles.actionsRow}>
-              <button
-                type="button"
-                style={styles.secondaryButton}
-                onClick={() => {
-                  clearOptionFields();
-                  setOptionCode("");
-                  setOptionError("");
-                }}
-              >
-                Limpar
-              </button>
-
-              <button
-                type="button"
-                style={styles.primaryButton}
-                onClick={handleCalculate}
-              >
-                Calcular
-              </button>
-            </div>
+            {!hasEnoughData && (
+              <div style={styles.warningBox}>
+                Preencha preço do ativo, strike, volatilidade e vencimento para
+                o cálculo ficar completo.
+              </div>
+            )}
           </div>
 
           <div style={styles.card}>
-            <h2 style={styles.cardTitle}>Resultado</h2>
+            <div style={styles.resultHeader}>
+              <div>
+                <h2 style={styles.cardTitle}>Resultado</h2>
+
+                <p style={styles.sectionText}>
+                  Black-Scholes, volatilidade implícita e gregas.
+                </p>
+              </div>
+
+              <div
+                style={{
+                  ...styles.statusBadge,
+                  ...getStatusStyle(valuationStatus),
+                }}
+              >
+                {getStatusLabel(valuationStatus)}
+              </div>
+            </div>
+
+            <div style={styles.resultPriceBox}>
+              <span style={styles.metricLabel}>Preço teórico Black-Scholes</span>
+
+              <strong style={styles.resultPrice}>
+                {formatOptionCurrency(blackScholesResult.price)}
+              </strong>
+
+              <small style={styles.metricHint}>
+                Calculado com a volatilidade informada
+              </small>
+            </div>
 
             <div style={styles.resultGrid}>
               <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Preço teórico BS</span>
+                <span style={styles.metricLabel}>Prêmio mercado</span>
                 <strong style={styles.metricValue}>
-                  {result ? formatCurrency(result.theoreticalPrice, 4) : "—"}
+                  {formatOptionCurrency(parsedMarketPremium)}
+                </strong>
+                <small style={styles.metricHint}>Valor atual da opção</small>
+              </div>
+
+              <div style={styles.metricBox}>
+                <span style={styles.metricLabel}>Diferença</span>
+                <strong style={styles.metricValue}>
+                  {formatOptionCurrency(difference)}
                 </strong>
                 <small style={styles.metricHint}>
-                  Usa a volatilidade preenchida no campo acima
+                  {formatPercent(differencePercent)}
                 </small>
               </div>
 
               <div style={styles.metricBox}>
                 <span style={styles.metricLabel}>Volatilidade implícita</span>
                 <strong style={styles.metricValue}>
-                  {result ? formatPercent(result.impliedVolatility) : "—"}
+                  {impliedVolatility !== null
+                    ? formatPercent(impliedVolatility)
+                    : "Não calculada"}
                 </strong>
                 <small style={styles.metricHint}>
-                  Calculada a partir do prêmio de mercado
+                  Extraída do prêmio de mercado
                 </small>
               </div>
 
               <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Mercado - Teórico</span>
+                <span style={styles.metricLabel}>Status</span>
                 <strong style={styles.metricValue}>
-                  {result ? formatCurrency(result.difference, 4) : "—"}
+                  Opção {getStatusLabel(valuationStatus)}
                 </strong>
                 <small style={styles.metricHint}>
-                  Diferença em reais por opção
+                  {getInterpretation(valuationStatus)}
                 </small>
               </div>
 
               <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Diferença %</span>
+                <span style={styles.metricLabel}>Total mercado</span>
                 <strong style={styles.metricValue}>
-                  {result
-                    ? formatNumber(
-                        result.differencePercent !== null
-                          ? result.differencePercent * 100
-                          : null,
-                        2
-                      )
-                    : "—"}
-                  {result?.differencePercent !== null && result ? "%" : ""}
-                </strong>
-                <small style={styles.metricHint}>Baseada no preço teórico</small>
-              </div>
-
-              <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Delta</span>
-                <strong style={styles.metricValue}>
-                  {result ? formatNumber(result.delta, 4) : "—"}
+                  {formatCurrency(totalMarketValue)}
                 </strong>
                 <small style={styles.metricHint}>
-                  Variação da opção para R$ 1,00 no ativo
+                  {parsedQuantity} contrato(s) × 100 opções
                 </small>
               </div>
 
               <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Gamma</span>
+                <span style={styles.metricLabel}>Total teórico</span>
                 <strong style={styles.metricValue}>
-                  {result ? formatNumber(result.gamma, 6) : "—"}
+                  {formatCurrency(totalTheoreticalValue)}
                 </strong>
                 <small style={styles.metricHint}>
-                  Quanto o delta muda quando o ativo varia
-                </small>
-              </div>
-
-              <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Vega</span>
-                <strong style={styles.metricValue}>
-                  {result ? formatNumber(result.vega, 4) : "—"}
-                </strong>
-                <small style={styles.metricHint}>
-                  Impacto estimado de +1 p.p. na volatilidade
-                </small>
-              </div>
-
-              <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Theta diário</span>
-                <strong style={styles.metricValue}>
-                  {result ? formatCurrency(result.theta, 4) : "—"}
-                </strong>
-                <small style={styles.metricHint}>
-                  Perda ou ganho teórico por dia
-                </small>
-              </div>
-
-              <div style={styles.metricBox}>
-                <span style={styles.metricLabel}>Base das gregas</span>
-                <strong style={styles.metricValueSmall}>
-                  {result?.greekSource || "—"}
-                </strong>
-                <small style={styles.metricHint}>
-                  Usa a volatilidade informada; se estiver vazia, usa a implícita
+                  {parsedQuantity} contrato(s) × 100 opções
                 </small>
               </div>
             </div>
 
-            {result?.error && <div style={styles.warningBox}>{result.error}</div>}
+            <div style={styles.actionsRow}>
+              <button
+                style={styles.secondaryButton}
+                type="button"
+                onClick={handleUseImpliedVolatility}
+                disabled={impliedVolatility === null}
+              >
+                Usar vol. implícita
+              </button>
 
-            <div style={styles.infoBox}>
-              <strong>Leitura rápida</strong>
-              <span>
-                Se o prêmio de mercado estiver acima do preço teórico, a opção
-                está mais cara que o modelo. Se estiver abaixo, está mais barata
-                que o modelo. A volatilidade implícita mostra qual volatilidade o
-                mercado está embutindo naquele prêmio.
-              </span>
+              <button
+                style={styles.primaryButton}
+                type="button"
+                onClick={handleCalculate}
+              >
+                Recalcular
+              </button>
+            </div>
+
+            <div style={styles.greeksGrid}>
+              <div style={styles.greekBox}>
+                <span>Delta</span>
+                <strong>{formatNumber(blackScholesResult.delta, 4)}</strong>
+              </div>
+
+              <div style={styles.greekBox}>
+                <span>Gamma</span>
+                <strong>{formatNumber(blackScholesResult.gamma, 6)}</strong>
+              </div>
+
+              <div style={styles.greekBox}>
+                <span>Theta/dia</span>
+                <strong>{formatOptionCurrency(blackScholesResult.theta)}</strong>
+              </div>
+
+              <div style={styles.greekBox}>
+                <span>Vega</span>
+                <strong>{formatOptionCurrency(blackScholesResult.vega)}</strong>
+              </div>
+
+              <div style={styles.greekBox}>
+                <span>Rho</span>
+                <strong>{formatOptionCurrency(blackScholesResult.rho)}</strong>
+              </div>
+
+              <div style={styles.greekBox}>
+                <span>D1 / D2</span>
+                <strong>
+                  {formatNumber(blackScholesResult.d1, 3)} /{" "}
+                  {formatNumber(blackScholesResult.d2, 3)}
+                </strong>
+              </div>
             </div>
           </div>
         </section>
 
         <section style={styles.warningBox}>
-          <strong>Importante:</strong> Black-Scholes é apenas um modelo teórico.
-          Ele não garante que a opção esteja cara ou barata de verdade.
-          Liquidez, spread, dividendos, exercício, eventos e distorções de
-          mercado podem alterar bastante o preço.
+          <strong>Importante:</strong> Black-Scholes é um modelo teórico. Ele
+          ajuda a comparar preço, mas não garante que a opção esteja realmente
+          barata ou cara. Liquidez, spread, dividendos, exercício, eventos e
+          atraso de cotação podem distorcer bastante o prêmio de mercado.
         </section>
       </main>
     </Layout>
@@ -1158,10 +1621,11 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    gap: "16px",
-    padding: "24px",
-    borderRadius: "20px",
-    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.22))",
+    gap: "18px",
+    flexWrap: "wrap",
+    padding: "26px",
+    borderRadius: "22px",
+    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.24))",
     background: "var(--bg-card, rgba(15, 23, 42, 0.92))",
   },
 
@@ -1169,11 +1633,11 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "flex-end",
-    gap: "10px",
+    gap: "12px",
     flexWrap: "wrap",
   },
 
-  lastLoaded: {
+  lastCalculation: {
     color: "var(--text-muted, #94a3b8)",
     fontSize: "12px",
   },
@@ -1188,72 +1652,254 @@ const styles: Record<string, CSSProperties> = {
 
   title: {
     margin: "6px 0 8px",
-    fontSize: "32px",
-    lineHeight: 1.1,
+    color: "#ffffff",
+    fontSize: "34px",
+    lineHeight: 1.08,
   },
 
   subtitle: {
     margin: 0,
     color: "var(--text-muted, #94a3b8)",
     maxWidth: "760px",
-  },
-
-  card: {
-    padding: "22px",
-    borderRadius: "20px",
-    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.22))",
-    background: "var(--bg-card, rgba(15, 23, 42, 0.92))",
-    boxShadow: "0 18px 50px rgba(0, 0, 0, 0.16)",
-  },
-
-  sectionHeader: {
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: "16px",
-    marginBottom: "16px",
-  },
-
-  cardTitle: {
-    margin: "0 0 8px",
-    fontSize: "20px",
-  },
-
-  sectionText: {
-    margin: 0,
-    color: "var(--text-muted, #94a3b8)",
-    fontSize: "14px",
-  },
-
-  searchRow: {
-    display: "grid",
-    gridTemplateColumns: "minmax(220px, 1fr) auto",
-    gap: "12px",
-    alignItems: "center",
-  },
-
-  searchInput: {
-    width: "100%",
-    minHeight: "46px",
-    padding: "10px 14px",
-    borderRadius: "14px",
-    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.28))",
-    background: "var(--bg-main, #020617)",
-    color: "var(--text-main, #e5e7eb)",
-    outline: "none",
     fontSize: "16px",
-    fontWeight: 700,
+    lineHeight: 1.45,
   },
 
   grid: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1.15fr) minmax(360px, 0.85fr)",
+    gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
     gap: "24px",
+  },
+
+  card: {
+    padding: "24px",
+    borderRadius: "22px",
+    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.24))",
+    background: "var(--bg-card, rgba(15, 23, 42, 0.92))",
+    boxShadow: "0 18px 45px rgba(0, 0, 0, 0.18)",
+  },
+
+  sectionHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "16px",
+    flexWrap: "wrap",
+    marginBottom: "18px",
+  },
+
+  cardTitle: {
+    margin: 0,
+    color: "#ffffff",
+    fontSize: "24px",
+    lineHeight: 1.2,
+  },
+
+  sectionText: {
+    margin: "8px 0 0",
+    color: "var(--text-muted, #94a3b8)",
+    fontSize: "14px",
+    lineHeight: 1.45,
+  },
+
+  searchForm: {
+    display: "grid",
+    gridTemplateColumns: "minmax(220px, 1fr) 180px",
+    gap: "12px",
+    alignItems: "stretch",
+  },
+
+  searchInput: {
+    height: "52px",
+    border: "1px solid rgba(148, 163, 184, 0.35)",
+    borderRadius: "16px",
+    background: "rgba(15, 23, 42, 0.96)",
+    color: "#ffffff",
+    outline: "none",
+    padding: "0 16px",
+    fontSize: "16px",
+    fontWeight: 800,
+    textTransform: "uppercase",
+  },
+
+  primaryButton: {
+    minHeight: "46px",
+    border: 0,
+    borderRadius: "16px",
+    background: "linear-gradient(135deg, #6366f1, #7c3aed)",
+    color: "#ffffff",
+    cursor: "pointer",
+    padding: "0 18px",
+    fontSize: "14px",
+    fontWeight: 900,
+    boxShadow: "0 10px 24px rgba(99, 102, 241, 0.28)",
+  },
+
+  secondaryButton: {
+    minHeight: "42px",
+    borderRadius: "14px",
+    border: "1px solid rgba(148, 163, 184, 0.26)",
+    background: "rgba(15, 23, 42, 0.72)",
+    color: "#e5e7eb",
+    cursor: "pointer",
+    padding: "0 14px",
+    fontSize: "13px",
+    fontWeight: 800,
+  },
+
+  smallButton: {
+    border: 0,
+    borderRadius: "10px",
+    background: "#6366f1",
+    color: "#ffffff",
+    cursor: "pointer",
+    padding: "8px 12px",
+    fontSize: "12px",
+    fontWeight: 900,
+  },
+
+  successButton: {
+    background: "#059669",
+  },
+
+  filtersRow: {
+    display: "grid",
+    gridTemplateColumns: "190px minmax(200px, 1fr)",
+    gap: "12px",
+    marginTop: "18px",
+  },
+
+  select: {
+    height: "44px",
+    border: "1px solid rgba(148, 163, 184, 0.35)",
+    borderRadius: "14px",
+    background: "rgba(15, 23, 42, 0.96)",
+    color: "#ffffff",
+    outline: "none",
+    padding: "0 12px",
+    fontSize: "14px",
+    fontWeight: 700,
+  },
+
+  filterInput: {
+    height: "44px",
+    border: "1px solid rgba(148, 163, 184, 0.35)",
+    borderRadius: "14px",
+    background: "rgba(15, 23, 42, 0.96)",
+    color: "#ffffff",
+    outline: "none",
+    padding: "0 14px",
+    fontSize: "14px",
+    fontWeight: 700,
+    textTransform: "uppercase",
+  },
+
+  tableCounter: {
+    margin: "14px 0 10px",
+    color: "var(--text-muted, #94a3b8)",
+    fontSize: "13px",
+  },
+
+  tableWrapper: {
+    maxHeight: "520px",
+    overflow: "auto",
+    border: "1px solid rgba(148, 163, 184, 0.22)",
+    borderRadius: "16px",
+  },
+
+  table: {
+    width: "100%",
+    minWidth: "1080px",
+    borderCollapse: "collapse",
+    fontSize: "13px",
+  },
+
+  th: {
+    position: "sticky",
+    top: 0,
+    zIndex: 1,
+    background: "#111827",
+    color: "#9ca3af",
+    textAlign: "left",
+    padding: "13px 12px",
+    borderBottom: "1px solid rgba(148, 163, 184, 0.24)",
+    fontSize: "11px",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+  },
+
+  td: {
+    padding: "13px 12px",
+    borderBottom: "1px solid rgba(148, 163, 184, 0.12)",
+    color: "#e5e7eb",
+    whiteSpace: "nowrap",
+  },
+
+  selectedTableRow: {
+    background: "rgba(5, 150, 105, 0.12)",
+  },
+
+  symbolText: {
+    color: "#ffffff",
+    fontWeight: 900,
+  },
+
+  optionBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "48px",
+    borderRadius: "999px",
+    padding: "4px 9px",
+    fontSize: "11px",
+    fontWeight: 900,
+  },
+
+  callBadge: {
+    background: "rgba(22, 163, 74, 0.18)",
+    color: "#86efac",
+  },
+
+  putBadge: {
+    background: "rgba(220, 38, 38, 0.18)",
+    color: "#fca5a5",
+  },
+
+  unknownBadge: {
+    background: "rgba(148, 163, 184, 0.16)",
+    color: "#cbd5e1",
+  },
+
+  emptyCell: {
+    padding: "28px",
+    textAlign: "center",
+    color: "#9ca3af",
+  },
+
+  errorBox: {
+    marginTop: "14px",
+    border: "1px solid rgba(248, 113, 113, 0.38)",
+    background: "rgba(127, 29, 29, 0.35)",
+    color: "#fecaca",
+    borderRadius: "16px",
+    padding: "14px 16px",
+    fontSize: "14px",
+    lineHeight: 1.45,
+  },
+
+  warningBox: {
+    border: "1px solid rgba(234, 179, 8, 0.28)",
+    borderRadius: "18px",
+    background: "rgba(113, 63, 18, 0.18)",
+    color: "#fde68a",
+    padding: "16px",
+    fontSize: "14px",
+    lineHeight: 1.5,
   },
 
   formGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
     gap: "14px",
   },
 
@@ -1263,112 +1909,114 @@ const styles: Record<string, CSSProperties> = {
     gap: "8px",
     color: "var(--text-muted, #94a3b8)",
     fontSize: "13px",
-    fontWeight: 600,
+    fontWeight: 800,
   },
 
   input: {
-    width: "100%",
-    minHeight: "42px",
-    padding: "10px 12px",
-    borderRadius: "12px",
-    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.28))",
-    background: "var(--bg-main, #020617)",
-    color: "var(--text-main, #e5e7eb)",
-    outline: "none",
-  },
-
-  actionsRow: {
-    marginTop: "18px",
-    display: "flex",
-    justifyContent: "flex-end",
-    gap: "10px",
-    flexWrap: "wrap",
-  },
-
-  primaryButton: {
-    border: 0,
-    borderRadius: "12px",
-    padding: "11px 16px",
-    background: "var(--accent, #6366f1)",
-    color: "#ffffff",
-    fontWeight: 800,
-    cursor: "pointer",
-  },
-
-  secondaryButton: {
-    border: "1px solid var(--border-color, rgba(148, 163, 184, 0.28))",
-    borderRadius: "12px",
-    padding: "10px 12px",
-    background: "transparent",
-    color: "var(--text-main, #e5e7eb)",
-    fontWeight: 700,
-    cursor: "pointer",
-  },
-
-  errorBox: {
-    marginTop: "14px",
-    padding: "12px 14px",
+    height: "48px",
+    border: "1px solid rgba(148, 163, 184, 0.28)",
     borderRadius: "14px",
-    border: "1px solid rgba(248, 113, 113, 0.35)",
-    background: "rgba(248, 113, 113, 0.1)",
-    color: "#fecaca",
-    fontSize: "14px",
+    background: "rgba(15, 23, 42, 0.9)",
+    color: "#ffffff",
+    outline: "none",
+    padding: "0 14px",
+    fontSize: "15px",
+    fontWeight: 700,
   },
 
-  warningBox: {
-    padding: "14px",
-    borderRadius: "16px",
-    border: "1px solid rgba(234, 179, 8, 0.35)",
-    background: "rgba(234, 179, 8, 0.1)",
-    color: "#fde68a",
-    fontSize: "14px",
-    lineHeight: 1.5,
+  resultHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "14px",
+    flexWrap: "wrap",
+    marginBottom: "18px",
+  },
+
+  resultPriceBox: {
+    border: "1px solid rgba(148, 163, 184, 0.18)",
+    borderRadius: "20px",
+    background: "rgba(30, 41, 59, 0.86)",
+    padding: "20px",
+    marginBottom: "16px",
+  },
+
+  resultPrice: {
+    display: "block",
+    margin: "8px 0",
+    color: "#ffffff",
+    fontSize: "34px",
+    lineHeight: 1.1,
   },
 
   resultGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
     gap: "12px",
   },
 
   metricBox: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-    padding: "14px",
+    border: "1px solid rgba(148, 163, 184, 0.18)",
     borderRadius: "16px",
-    background: "rgba(148, 163, 184, 0.08)",
+    background: "rgba(30, 41, 59, 0.72)",
+    padding: "14px",
+    minHeight: "96px",
   },
 
   metricLabel: {
+    display: "block",
     color: "var(--text-muted, #94a3b8)",
     fontSize: "12px",
+    fontWeight: 800,
+    marginBottom: "6px",
   },
 
   metricValue: {
-    fontSize: "22px",
-  },
-
-  metricValueSmall: {
-    fontSize: "16px",
+    display: "block",
+    color: "#ffffff",
+    fontSize: "18px",
+    lineHeight: 1.2,
   },
 
   metricHint: {
+    display: "block",
+    marginTop: "6px",
     color: "var(--text-muted, #94a3b8)",
     fontSize: "12px",
+    lineHeight: 1.35,
   },
 
-  infoBox: {
-    marginTop: "14px",
+  actionsRow: {
     display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-    padding: "14px",
-    borderRadius: "16px",
-    background: "rgba(59, 130, 246, 0.1)",
-    border: "1px solid rgba(59, 130, 246, 0.24)",
-    color: "#bfdbfe",
-    fontSize: "14px",
-    lineHeight: 1.5,
+    justifyContent: "flex-end",
+    gap: "10px",
+    flexWrap: "wrap",
+    margin: "16px 0",
+  },
+
+  statusBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: "36px",
+    border: "1px solid transparent",
+    borderRadius: "999px",
+    padding: "0 14px",
+    fontSize: "13px",
+    fontWeight: 900,
+    whiteSpace: "nowrap",
+  },
+
+  greeksGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+    gap: "10px",
+  },
+
+  greekBox: {
+    border: "1px solid rgba(148, 163, 184, 0.18)",
+    borderRadius: "14px",
+    background: "rgba(15, 23, 42, 0.62)",
+    padding: "12px",
   },
 };

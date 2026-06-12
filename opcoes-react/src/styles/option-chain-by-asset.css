@@ -1,0 +1,225 @@
+.option-chain-by-asset {
+  width: 100%;
+  background: #1f2937;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 22px;
+  padding: 24px;
+  color: #f8fafc;
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.18);
+}
+
+.option-chain-by-asset__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  align-items: end;
+}
+
+.option-chain-by-asset__header h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 900;
+}
+
+.option-chain-by-asset__header p {
+  margin: 10px 0 0;
+  color: #cbd5e1;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.option-chain-by-asset__search {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 150px;
+  gap: 12px;
+  width: 100%;
+}
+
+.option-chain-by-asset__search input,
+.option-chain-by-asset__filters input,
+.option-chain-by-asset__filters select {
+  width: 100%;
+  height: 50px;
+  box-sizing: border-box;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 16px;
+  background: #0f172a;
+  color: #ffffff;
+  outline: none;
+  padding: 0 16px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.option-chain-by-asset__search input,
+.option-chain-by-asset__filters input {
+  text-transform: uppercase;
+}
+
+.option-chain-by-asset__search input::placeholder,
+.option-chain-by-asset__filters input::placeholder {
+  color: #64748b;
+}
+
+.option-chain-by-asset__search button {
+  height: 50px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #6366f1, #7c3aed);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 900;
+  box-shadow: 0 10px 24px rgba(99, 102, 241, 0.32);
+}
+
+.option-chain-by-asset__search button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.option-chain-by-asset__error {
+  margin-top: 16px;
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  background: rgba(127, 29, 29, 0.35);
+  color: #fecaca;
+  border-radius: 16px;
+  padding: 14px 16px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.option-chain-by-asset__filters {
+  display: grid;
+  grid-template-columns: 190px minmax(180px, 1fr);
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.option-chain-by-asset__filters select {
+  text-transform: none;
+}
+
+.option-chain-by-asset__count {
+  margin: 14px 0 10px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+
+.option-chain-by-asset__table-wrapper {
+  max-height: 520px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 16px;
+}
+
+.option-chain-by-asset__table {
+  width: 100%;
+  min-width: 1050px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.option-chain-by-asset__table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #111827;
+  color: #9ca3af;
+  text-align: left;
+  padding: 13px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.24);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.option-chain-by-asset__table td {
+  padding: 13px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  color: #e5e7eb;
+  white-space: nowrap;
+}
+
+.option-chain-by-asset__table tr:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.option-chain-by-asset__table tr.selected {
+  background: rgba(5, 150, 105, 0.12);
+}
+
+.option-chain-by-asset__table strong {
+  color: #ffffff;
+  font-weight: 900;
+}
+
+.option-chain-by-asset__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.option-chain-by-asset__badge--call {
+  background: rgba(22, 163, 74, 0.18);
+  color: #86efac;
+}
+
+.option-chain-by-asset__badge--put {
+  background: rgba(220, 38, 38, 0.18);
+  color: #fca5a5;
+}
+
+.option-chain-by-asset__badge--unknown {
+  background: rgba(148, 163, 184, 0.16);
+  color: #cbd5e1;
+}
+
+.option-chain-by-asset__use-button {
+  border: 0;
+  border-radius: 10px;
+  background: #6366f1;
+  color: #ffffff;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.option-chain-by-asset__table tr.selected .option-chain-by-asset__use-button {
+  background: #059669;
+}
+
+.option-chain-by-asset__empty {
+  padding: 28px !important;
+  text-align: center;
+  color: #9ca3af !important;
+}
+
+@media (min-width: 900px) {
+  .option-chain-by-asset__header {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
+  }
+}
+
+@media (max-width: 640px) {
+  .option-chain-by-asset {
+    padding: 18px;
+  }
+
+  .option-chain-by-asset__search,
+  .option-chain-by-asset__filters {
+    grid-template-columns: 1fr;
+  }
+
+  .option-chain-by-asset__search button {
+    width: 100%;
+  }
+}
