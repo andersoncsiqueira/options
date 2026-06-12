@@ -1,10 +1,11 @@
 import type {
+  MarketDataProvider,
   Quote,
   HistoricalCandle,
   HistoryRange,
-} from "./marketData.types";
+} from "./marketData/marketData.types";
 
-const API_BASE_URL = import.meta.env.VITE_OPTIONS_API_URL;
+import { getAssetHistory, getAssetQuote } from "../services/optionsMarketApi";
 
 type ApiRecord = Record<string, unknown>;
 
@@ -25,7 +26,6 @@ function toNumber(value: unknown): number | undefined {
 function normalizeDate(value: unknown): string {
   if (typeof value === "number") {
     const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
-
     return new Date(timestamp).toISOString().slice(0, 10);
   }
 
@@ -34,30 +34,6 @@ function normalizeDate(value: unknown): string {
   }
 
   return new Date().toISOString().slice(0, 10);
-}
-
-async function apiRequest<T>(endpoint: string): Promise<T> {
-  if (!API_BASE_URL) {
-    throw new Error("VITE_OPTIONS_API_URL não configurada no .env.local");
-  }
-
-  const url = `${API_BASE_URL}${endpoint}`;
-
-  console.log("[marketDataService] Chamando API real:", url);
-
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-
-    throw new Error(
-      `Erro na API: ${response.status} ${response.statusText} - ${errorText}`
-    );
-  }
-
-  return response.json() as Promise<T>;
 }
 
 function unwrapQuote(raw: unknown): ApiRecord {
@@ -79,12 +55,6 @@ function unwrapHistory(raw: unknown): unknown[] {
   if (Array.isArray(raw.candles)) return raw.candles;
   if (Array.isArray(raw.prices)) return raw.prices;
 
-  if (isRecord(raw.data)) {
-    if (Array.isArray(raw.data.history)) return raw.data.history;
-    if (Array.isArray(raw.data.candles)) return raw.data.candles;
-    if (Array.isArray(raw.data.prices)) return raw.data.prices;
-  }
-
   return [];
 }
 
@@ -94,12 +64,10 @@ function normalizeQuote(raw: unknown, fallbackSymbol: string): Quote | null {
   const price =
     toNumber(data.price) ??
     toNumber(data.currentPrice) ??
-    toNumber(data.regularMarketPrice) ??
-    toNumber(data.lastPrice) ??
-    toNumber(data.close);
+    toNumber(data.close) ??
+    toNumber(data.regularMarketPrice);
 
   if (price === undefined) {
-    console.log("[marketDataService] Cotação sem preço válido:", raw);
     return null;
   }
 
@@ -123,11 +91,7 @@ function normalizeQuote(raw: unknown, fallbackSymbol: string): Quote | null {
 
 function normalizeHistory(raw: unknown): HistoricalCandle[] {
   const rawCandles = unwrapHistory(raw);
-
-  console.log("[marketDataService] Histórico bruto recebido:", raw);
-  console.log("[marketDataService] Candles encontrados:", rawCandles.length);
-
-  const candles: HistoricalCandle[] = [];
+  const normalizedCandles: HistoricalCandle[] = [];
 
   rawCandles.forEach((rawItem) => {
     if (!isRecord(rawItem)) return;
@@ -144,7 +108,7 @@ function normalizeHistory(raw: unknown): HistoricalCandle[] {
     const high = toNumber(rawItem.high) ?? Math.max(open, close);
     const low = toNumber(rawItem.low) ?? Math.min(open, close);
 
-    candles.push({
+    normalizedCandles.push({
       date: normalizeDate(
         rawItem.date ?? rawItem.datetime ?? rawItem.time ?? rawItem.timestamp
       ),
@@ -156,36 +120,38 @@ function normalizeHistory(raw: unknown): HistoricalCandle[] {
     });
   });
 
-  return candles.sort((a, b) => a.date.localeCompare(b.date));
+  return normalizedCandles.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export async function getQuote(symbol: string): Promise<Quote | null> {
-  const cleanSymbol = normalizeSymbol(symbol);
+export const apiMarketDataProvider: MarketDataProvider = {
+  async getQuote(symbol: string): Promise<Quote | null> {
+    const cleanSymbol = normalizeSymbol(symbol);
 
-  const response = await apiRequest<unknown>(
-    `/api/market-data/${cleanSymbol}/quote`
-  );
+    console.log("Buscando cotação real da API:", cleanSymbol);
 
-  return normalizeQuote(response, cleanSymbol);
-}
+    const response = await getAssetQuote(cleanSymbol);
 
-export async function getQuotes(symbols: string[]): Promise<Quote[]> {
-  const quotes = await Promise.all(
-    symbols.map((symbol) => getQuote(symbol))
-  );
+    return normalizeQuote(response, cleanSymbol);
+  },
 
-  return quotes.filter((quote): quote is Quote => quote !== null);
-}
+  async getQuotes(symbols: string[]): Promise<Quote[]> {
+    const quotes = await Promise.all(
+      symbols.map((symbol) => apiMarketDataProvider.getQuote(symbol))
+    );
 
-export async function getHistory(
-  symbol: string,
-  range: HistoryRange
-): Promise<HistoricalCandle[]> {
-  const cleanSymbol = normalizeSymbol(symbol);
+    return quotes.filter((quote): quote is Quote => quote !== null);
+  },
 
-  const response = await apiRequest<unknown>(
-    `/api/market-data/${cleanSymbol}/history?range=${range}`
-  );
+  async getHistory(
+    symbol: string,
+    range: HistoryRange
+  ): Promise<HistoricalCandle[]> {
+    const cleanSymbol = normalizeSymbol(symbol);
 
-  return normalizeHistory(response);
-}
+    console.log("Buscando histórico real da API:", cleanSymbol, range);
+
+    const response = await getAssetHistory(cleanSymbol, range);
+
+    return normalizeHistory(response);
+  },
+};

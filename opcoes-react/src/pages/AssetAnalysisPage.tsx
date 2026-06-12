@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Area,
   AreaChart,
@@ -12,10 +12,17 @@ import {
   YAxis,
 } from "recharts";
 
+import Layout from "../components/Layout/Layout";
+
 import {
   getHistory,
   getQuote,
 } from "../services/marketData/marketDataService";
+
+import {
+  getOptionBySymbol,
+  getOptionHistory,
+} from "../services/optionsMarketApi";
 
 import type {
   HistoricalCandle,
@@ -26,6 +33,9 @@ import type {
 import "../styles/asset-analysis.css";
 
 type Period = "week" | "month" | "year";
+type AnalysisKind = "asset" | "option";
+
+type ApiRecord = Record<string, unknown>;
 
 type VolatilityPoint = {
   date: string;
@@ -43,6 +53,7 @@ type ImportantDate = {
 
 type AssetAnalytics = {
   symbol: string;
+  kind: AnalysisKind;
   quote: Quote | null;
   currentPrice: number;
   previousPrice: number;
@@ -53,6 +64,30 @@ type AssetAnalytics = {
   volatilitySeries: VolatilityPoint[];
   importantDates: ImportantDate[];
 };
+
+function isRecord(value: unknown): value is ApiRecord {
+  return typeof value === "object" && value !== null;
+}
+
+function toNumber(value: unknown): number | undefined {
+  const numberValue = Number(value);
+
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function normalizeDate(value: unknown): string {
+  if (typeof value === "number") {
+    const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
+
+    return new Date(timestamp).toISOString().slice(0, 10);
+  }
+
+  if (typeof value === "string") {
+    return value.slice(0, 10);
+  }
+
+  return new Date().toISOString().slice(0, 10);
+}
 
 function formatCurrency(value: number): string {
   return value.toLocaleString("pt-BR", {
@@ -81,6 +116,18 @@ function getHistoryRangeByPeriod(period: Period): HistoryRange {
   if (period === "month") return "1m";
 
   return "1y";
+}
+
+function detectAnalysisKind(symbol: string): AnalysisKind {
+  const cleanSymbol = symbol.trim().toUpperCase();
+
+  // Ativo: PETR4, VALE3, BBAS3 etc.
+  // Opção: PETRF429, VALEF600 etc.
+  if (/^[A-Z]{4}[A-Z]\d+/.test(cleanSymbol)) {
+    return "option";
+  }
+
+  return "asset";
 }
 
 function average(values: number[]): number {
@@ -137,10 +184,7 @@ function calculateVolatilitySeries(
 
   for (let i = windowSize; i < candles.length; i++) {
     const windowCandles = candles.slice(i - windowSize, i + 1);
-
-    const annualizedVolatility =
-      calculateAnnualizedVolatility(windowCandles);
-
+    const annualizedVolatility = calculateAnnualizedVolatility(windowCandles);
     const close = candles[i].close;
 
     result.push({
@@ -153,8 +197,145 @@ function calculateVolatilitySeries(
   return result;
 }
 
-function generateImportantDates(symbol: string): ImportantDate[] {
+function unwrapArray(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+
+  if (!isRecord(raw)) return [];
+
+  if (Array.isArray(raw.data)) return raw.data;
+  if (Array.isArray(raw.history)) return raw.history;
+  if (Array.isArray(raw.candles)) return raw.candles;
+  if (Array.isArray(raw.prices)) return raw.prices;
+
+  if (isRecord(raw.data)) {
+    if (Array.isArray(raw.data.history)) return raw.data.history;
+    if (Array.isArray(raw.data.candles)) return raw.data.candles;
+    if (Array.isArray(raw.data.prices)) return raw.data.prices;
+  }
+
+  return [];
+}
+
+function unwrapObject(raw: unknown): ApiRecord {
+  if (!isRecord(raw)) return {};
+
+  if (isRecord(raw.data)) return raw.data;
+  if (isRecord(raw.option)) return raw.option;
+  if (isRecord(raw.quote)) return raw.quote;
+
+  return raw;
+}
+
+function normalizeOptionQuote(
+  raw: unknown,
+  fallbackSymbol: string
+): Quote | null {
+  const data = unwrapObject(raw);
+
+  const price =
+    toNumber(data.price) ??
+    toNumber(data.lastPrice) ??
+    toNumber(data.currentPrice) ??
+    toNumber(data.close) ??
+    toNumber(data.regularMarketPrice) ??
+    toNumber(data.premium) ??
+    toNumber(data.bid) ??
+    toNumber(data.ask);
+
+  if (price === undefined) {
+    return null;
+  }
+
+  return {
+    symbol: String(data.symbol ?? data.code ?? fallbackSymbol).toUpperCase(),
+    price,
+    change:
+      toNumber(data.change) ??
+      toNumber(data.dailyChange) ??
+      toNumber(data.regularMarketChange),
+    changePercent:
+      toNumber(data.changePercent) ??
+      toNumber(data.dailyChangePercent) ??
+      toNumber(data.regularMarketChangePercent),
+    updatedAt:
+      typeof data.updatedAt === "string"
+        ? data.updatedAt
+        : new Date().toISOString(),
+  };
+}
+
+function normalizeOptionHistory(raw: unknown): HistoricalCandle[] {
+  const rawCandles = unwrapArray(raw);
+  const candles: HistoricalCandle[] = [];
+
+  rawCandles.forEach((rawItem) => {
+    if (!isRecord(rawItem)) return;
+
+    const close =
+      toNumber(rawItem.close) ??
+      toNumber(rawItem.price) ??
+      toNumber(rawItem.lastPrice) ??
+      toNumber(rawItem.premium) ??
+      toNumber(rawItem.regularMarketPrice);
+
+    if (close === undefined) return;
+
+    const open = toNumber(rawItem.open) ?? close;
+    const high = toNumber(rawItem.high) ?? Math.max(open, close);
+    const low = toNumber(rawItem.low) ?? Math.min(open, close);
+
+    candles.push({
+      date: normalizeDate(
+        rawItem.date ?? rawItem.datetime ?? rawItem.time ?? rawItem.timestamp
+      ),
+      open,
+      high,
+      low,
+      close,
+      volume: toNumber(rawItem.volume),
+    });
+  });
+
+  return candles.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function generateImportantDates(
+  symbol: string,
+  kind: AnalysisKind
+): ImportantDate[] {
   const today = new Date();
+
+  if (kind === "option") {
+    return [
+      {
+        id: "1",
+        date: new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate() + 1
+        )
+          .toISOString()
+          .slice(0, 10),
+        title: "Revisar prêmio",
+        type: "event",
+        description:
+          "Comparar prêmio de mercado com preço teórico, liquidez, spread e volatilidade implícita.",
+      },
+      {
+        id: "2",
+        date: new Date(
+          today.getFullYear(),
+          today.getMonth(),
+          today.getDate() + 5
+        )
+          .toISOString()
+          .slice(0, 10),
+        title: "Acompanhar vencimento",
+        type: "options",
+        description: `Conferir vencimento, liquidez e risco da opção ${symbol}.`,
+      },
+    ];
+  }
 
   return [
     {
@@ -221,11 +402,32 @@ async function getAssetAnalytics(
 ): Promise<AssetAnalytics> {
   const cleanSymbol = symbol.trim().toUpperCase();
   const range = getHistoryRangeByPeriod(period);
+  const kind = detectAnalysisKind(cleanSymbol);
 
-  const [quote, candles] = await Promise.all([
-    getQuote(cleanSymbol),
-    getHistory(cleanSymbol, range),
-  ]);
+  let quote: Quote | null = null;
+  let candles: HistoricalCandle[] = [];
+
+  if (kind === "option") {
+    const [optionQuoteRaw, optionHistoryRaw] = await Promise.all([
+      getOptionBySymbol(cleanSymbol),
+      getOptionHistory(cleanSymbol, range),
+    ]);
+
+    quote = normalizeOptionQuote(optionQuoteRaw, cleanSymbol);
+    candles = normalizeOptionHistory(optionHistoryRaw);
+  } else {
+    const [assetQuote, assetCandles] = await Promise.all([
+      getQuote(cleanSymbol),
+      getHistory(cleanSymbol, range),
+    ]);
+
+    quote = assetQuote;
+    candles = assetCandles;
+  }
+
+  if (!quote && candles.length === 0) {
+    throw new Error(`Nenhum dado encontrado para ${cleanSymbol}.`);
+  }
 
   const lastCandle = candles[candles.length - 1];
   const previousCandle = candles[candles.length - 2];
@@ -233,19 +435,18 @@ async function getAssetAnalytics(
   const currentPrice = quote?.price ?? lastCandle?.close ?? 0;
   const previousPrice = previousCandle?.close ?? currentPrice;
 
-  const dailyChange =
-    quote?.change ?? currentPrice - previousPrice;
+  const dailyChange = quote?.change ?? currentPrice - previousPrice;
 
   const dailyChangePercent =
     quote?.changePercent ??
     (previousPrice ? (dailyChange / previousPrice) * 100 : 0);
 
   const annualizedVolatility = calculateAnnualizedVolatility(candles);
-
   const volatilitySeries = calculateVolatilitySeries(candles, 21);
 
   return {
     symbol: cleanSymbol,
+    kind,
     quote,
     currentPrice,
     previousPrice,
@@ -254,7 +455,7 @@ async function getAssetAnalytics(
     annualizedVolatility,
     candles,
     volatilitySeries,
-    importantDates: generateImportantDates(cleanSymbol),
+    importantDates: generateImportantDates(cleanSymbol, kind),
   };
 }
 
@@ -275,10 +476,11 @@ export default function AssetAnalysisPage() {
 
       setAnalytics(data);
     } catch (error) {
-      console.error("Erro ao carregar dados do ativo:", error);
+      console.error("Erro ao carregar dados:", error);
 
+      setAnalytics(null);
       setErrorMessage(
-        "Não foi possível carregar os dados do ativo. Verifique o código digitado."
+        "Não foi possível carregar os dados. Verifique o código digitado."
       );
     } finally {
       setIsLoading(false);
@@ -301,7 +503,7 @@ export default function AssetAnalysisPage() {
     return analytics.currentPrice * periodVolatility;
   }, [analytics, periodVolatility]);
 
-  function handleSubmit(event: React.FormEvent) {
+  function handleSubmit(event: FormEvent) {
     event.preventDefault();
 
     const cleanSymbol = inputSymbol.trim().toUpperCase();
@@ -312,283 +514,305 @@ export default function AssetAnalysisPage() {
   }
 
   return (
-    <main className="asset-page">
-      <section className="asset-header">
-        <div>
-          <span className="asset-eyebrow">Ativo principal</span>
+    <Layout>
+      <main className="asset-page">
+        <section className="asset-header">
+          <div>
+            <span className="asset-eyebrow">
+              {analytics?.kind === "option" ? "Opção" : "Ativo principal"}
+            </span>
 
-          <h1>Análise do ativo</h1>
+            <h1>
+              {analytics?.kind === "option"
+                ? "Análise da opção"
+                : "Análise do ativo"}
+            </h1>
 
-          <p>
-            Histórico de preço, volatilidade percentual, volatilidade financeira
-            e calendário de datas relevantes para operações com opções.
-          </p>
-        </div>
+            <p>
+              Histórico de preço, volatilidade percentual, volatilidade
+              financeira e calendário de datas relevantes para operações com
+              opções.
+            </p>
+          </div>
 
-        <form className="asset-search" onSubmit={handleSubmit}>
-          <input
-            value={inputSymbol}
-            onChange={(event) => setInputSymbol(event.target.value)}
-            placeholder="Ex: PETR4"
-          />
+          <form className="asset-search" onSubmit={handleSubmit}>
+            <input
+              value={inputSymbol}
+              onChange={(event) =>
+                setInputSymbol(event.target.value.toUpperCase())
+              }
+              placeholder="Ex: PETR4 ou PETRF429"
+            />
 
-          <button type="submit">Buscar</button>
-        </form>
-      </section>
+            <button type="submit">Buscar</button>
+          </form>
+        </section>
 
-      {isLoading && <div className="asset-loading">Carregando dados...</div>}
+        {isLoading && <div className="asset-loading">Carregando dados...</div>}
 
-      {!isLoading && errorMessage && (
-        <div className="asset-loading">{errorMessage}</div>
-      )}
+        {!isLoading && errorMessage && (
+          <div className="asset-loading">{errorMessage}</div>
+        )}
 
-      {!isLoading && !errorMessage && analytics && (
-        <>
-          <section className="asset-summary-grid">
-            <article className="asset-card">
-              <span>Ativo</span>
-              <strong>{analytics.symbol}</strong>
-            </article>
+        {!isLoading && !errorMessage && analytics && (
+          <>
+            <section className="asset-summary-grid">
+              <article className="asset-card">
+                <span>{analytics.kind === "option" ? "Opção" : "Ativo"}</span>
+                <strong>{analytics.symbol}</strong>
+              </article>
 
-            <article className="asset-card">
-              <span>Preço atual</span>
-              <strong>{formatCurrency(analytics.currentPrice)}</strong>
-            </article>
+              <article className="asset-card">
+                <span>
+                  {analytics.kind === "option" ? "Prêmio atual" : "Preço atual"}
+                </span>
+                <strong>{formatCurrency(analytics.currentPrice)}</strong>
+              </article>
 
-            <article className="asset-card">
-              <span>Variação diária</span>
+              <article className="asset-card">
+                <span>Variação diária</span>
 
-              <strong
-                className={
-                  analytics.dailyChange >= 0 ? "positive" : "negative"
-                }
-              >
-                {analytics.dailyChange >= 0 ? "+" : ""}
-                {formatCurrency(analytics.dailyChange)}
-              </strong>
-
-              <small
-                className={
-                  analytics.dailyChangePercent >= 0
-                    ? "positive"
-                    : "negative"
-                }
-              >
-                {analytics.dailyChangePercent >= 0 ? "+" : ""}
-                {formatPercent(analytics.dailyChangePercent)}
-              </small>
-            </article>
-
-            <article className="asset-card">
-              <span>Volatilidade anualizada</span>
-              <strong>
-                {formatPercent(analytics.annualizedVolatility * 100)}
-              </strong>
-              <small>Baseada no período selecionado</small>
-            </article>
-          </section>
-
-          <section className="asset-period-card">
-            <div>
-              <h2>Período de análise</h2>
-
-              <p>
-                Os gráficos abaixo usam o mesmo período selecionado:
-                semana, mês ou ano.
-              </p>
-            </div>
-
-            <div className="asset-period-buttons">
-              <button
-                type="button"
-                className={period === "week" ? "active" : ""}
-                onClick={() => setPeriod("week")}
-              >
-                Semana
-              </button>
-
-              <button
-                type="button"
-                className={period === "month" ? "active" : ""}
-                onClick={() => setPeriod("month")}
-              >
-                Mês
-              </button>
-
-              <button
-                type="button"
-                className={period === "year" ? "active" : ""}
-                onClick={() => setPeriod("year")}
-              >
-                Ano
-              </button>
-            </div>
-          </section>
-
-          <section className="asset-chart-card">
-            <div className="asset-chart-header">
-              <div>
-                <h2>Histórico do ativo — {getPeriodLabel(period)}</h2>
-
-                <p>
-                  Preço de fechamento diário de {analytics.symbol}.
-                </p>
-              </div>
-            </div>
-
-            <div className="asset-chart-wrapper">
-              <ResponsiveContainer width="100%" height={340}>
-                <AreaChart data={analytics.candles}>
-                  <CartesianGrid strokeDasharray="3 3" />
-
-                  <XAxis dataKey="date" minTickGap={32} />
-
-                  <YAxis
-                    domain={["auto", "auto"]}
-                    tickFormatter={(value) => `R$ ${value}`}
-                  />
-
-                  <Tooltip
-                    formatter={(value) => [
-                      formatCurrency(Number(value)),
-                      "Fechamento",
-                    ]}
-                    labelFormatter={(label) =>
-                      `Data: ${formatDate(String(label))}`
-                    }
-                  />
-
-                  <Area
-                    type="monotone"
-                    dataKey="close"
-                    name="Fechamento"
-                    strokeWidth={2}
-                    fillOpacity={0.2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </section>
-
-          <section className="asset-chart-card">
-            <div className="asset-chart-header">
-              <div>
-                <h2>Volatilidade — {getPeriodLabel(period)}</h2>
-
-                <p>
-                  Volatilidade em percentual e em valor financeiro aproximado.
-                </p>
-              </div>
-            </div>
-
-            <div className="asset-vol-summary">
-              <div>
-                <span>Volatilidade percentual no período</span>
-                <strong>{formatPercent(periodVolatility * 100)}</strong>
-              </div>
-
-              <div>
-                <span>Volatilidade financeira estimada</span>
-                <strong>{formatCurrency(periodFinancialVolatility)}</strong>
-              </div>
-            </div>
-
-            <div className="asset-chart-wrapper">
-              {analytics.volatilitySeries.length === 0 ? (
-                <div className="asset-loading">
-                  Não há dados suficientes para calcular volatilidade nesse
-                  período.
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={340}>
-                  <LineChart data={analytics.volatilitySeries}>
-                    <CartesianGrid strokeDasharray="3 3" />
-
-                    <XAxis dataKey="date" minTickGap={32} />
-
-                    <YAxis
-                      yAxisId="percent"
-                      orientation="left"
-                      tickFormatter={(value) => `${value}%`}
-                    />
-
-                    <YAxis
-                      yAxisId="financial"
-                      orientation="right"
-                      tickFormatter={(value) => `R$ ${value}`}
-                    />
-
-                    <Tooltip
-                      formatter={(value, name) => {
-                        if (name === "Volatilidade %") {
-                          return [`${Number(value).toFixed(2)}%`, name];
-                        }
-
-                        return [formatCurrency(Number(value)), name];
-                      }}
-                      labelFormatter={(label) =>
-                        `Data: ${formatDate(String(label))}`
-                      }
-                    />
-
-                    <Legend />
-
-                    <Line
-                      yAxisId="percent"
-                      type="monotone"
-                      dataKey="volatilityPercent"
-                      name="Volatilidade %"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-
-                    <Line
-                      yAxisId="financial"
-                      type="monotone"
-                      dataKey="volatilityFinancial"
-                      name="Volatilidade em R$"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </section>
-
-          <section className="asset-calendar-card">
-            <div className="asset-chart-header">
-              <div>
-                <h2>Calendário do ativo</h2>
-
-                <p>
-                  Datas que podem afetar preço, volatilidade e prêmio das
-                  opções.
-                </p>
-              </div>
-            </div>
-
-            <div className="asset-calendar-list">
-              {analytics.importantDates.map((item) => (
-                <article
-                  key={item.id}
-                  className={`asset-calendar-item ${item.type}`}
+                <strong
+                  className={
+                    analytics.dailyChange >= 0 ? "positive" : "negative"
+                  }
                 >
-                  <div className="asset-calendar-date">
-                    <strong>{formatDate(item.date)}</strong>
-                    <span>{item.type}</span>
-                  </div>
+                  {analytics.dailyChange >= 0 ? "+" : ""}
+                  {formatCurrency(analytics.dailyChange)}
+                </strong>
 
-                  <div>
-                    <h3>{item.title}</h3>
-                    <p>{item.description}</p>
+                <small
+                  className={
+                    analytics.dailyChangePercent >= 0 ? "positive" : "negative"
+                  }
+                >
+                  {analytics.dailyChangePercent >= 0 ? "+" : ""}
+                  {formatPercent(analytics.dailyChangePercent)}
+                </small>
+              </article>
+
+              <article className="asset-card">
+                <span>Volatilidade anualizada</span>
+                <strong>
+                  {formatPercent(analytics.annualizedVolatility * 100)}
+                </strong>
+                <small>Baseada no período selecionado</small>
+              </article>
+            </section>
+
+            <section className="asset-period-card">
+              <div>
+                <h2>Período de análise</h2>
+
+                <p>
+                  Os gráficos abaixo usam o mesmo período selecionado: semana,
+                  mês ou ano.
+                </p>
+              </div>
+
+              <div className="asset-period-buttons">
+                <button
+                  type="button"
+                  className={period === "week" ? "active" : ""}
+                  onClick={() => setPeriod("week")}
+                >
+                  Semana
+                </button>
+
+                <button
+                  type="button"
+                  className={period === "month" ? "active" : ""}
+                  onClick={() => setPeriod("month")}
+                >
+                  Mês
+                </button>
+
+                <button
+                  type="button"
+                  className={period === "year" ? "active" : ""}
+                  onClick={() => setPeriod("year")}
+                >
+                  Ano
+                </button>
+              </div>
+            </section>
+
+            <section className="asset-chart-card">
+              <div className="asset-chart-header">
+                <div>
+                  <h2>
+                    Histórico{" "}
+                    {analytics.kind === "option" ? "da opção" : "do ativo"} —{" "}
+                    {getPeriodLabel(period)}
+                  </h2>
+
+                  <p>Preço de fechamento diário de {analytics.symbol}.</p>
+                </div>
+              </div>
+
+              <div className="asset-chart-wrapper">
+                {analytics.candles.length === 0 ? (
+                  <div className="asset-loading">
+                    Não há histórico suficiente para montar o gráfico.
                   </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        </>
-      )}
-    </main>
+                ) : (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <AreaChart data={analytics.candles}>
+                      <CartesianGrid strokeDasharray="3 3" />
+
+                      <XAxis dataKey="date" minTickGap={32} />
+
+                      <YAxis
+                        domain={["auto", "auto"]}
+                        tickFormatter={(value) => `R$ ${value}`}
+                      />
+
+                      <Tooltip
+                        formatter={(value) => [
+                          formatCurrency(Number(value)),
+                          "Fechamento",
+                        ]}
+                        labelFormatter={(label) =>
+                          `Data: ${formatDate(String(label))}`
+                        }
+                      />
+
+                      <Area
+                        type="monotone"
+                        dataKey="close"
+                        name="Fechamento"
+                        strokeWidth={2}
+                        fillOpacity={0.2}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </section>
+
+            <section className="asset-chart-card">
+              <div className="asset-chart-header">
+                <div>
+                  <h2>Volatilidade — {getPeriodLabel(period)}</h2>
+
+                  <p>
+                    Volatilidade em percentual e em valor financeiro aproximado.
+                  </p>
+                </div>
+              </div>
+
+              <div className="asset-vol-summary">
+                <div>
+                  <span>Volatilidade percentual no período</span>
+                  <strong>{formatPercent(periodVolatility * 100)}</strong>
+                </div>
+
+                <div>
+                  <span>Volatilidade financeira estimada</span>
+                  <strong>{formatCurrency(periodFinancialVolatility)}</strong>
+                </div>
+              </div>
+
+              <div className="asset-chart-wrapper">
+                {analytics.volatilitySeries.length === 0 ? (
+                  <div className="asset-loading">
+                    Não há dados suficientes para calcular volatilidade nesse
+                    período.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={340}>
+                    <LineChart data={analytics.volatilitySeries}>
+                      <CartesianGrid strokeDasharray="3 3" />
+
+                      <XAxis dataKey="date" minTickGap={32} />
+
+                      <YAxis
+                        yAxisId="percent"
+                        orientation="left"
+                        tickFormatter={(value) => `${value}%`}
+                      />
+
+                      <YAxis
+                        yAxisId="financial"
+                        orientation="right"
+                        tickFormatter={(value) => `R$ ${value}`}
+                      />
+
+                      <Tooltip
+                        formatter={(value, name) => {
+                          if (name === "Volatilidade %") {
+                            return [`${Number(value).toFixed(2)}%`, name];
+                          }
+
+                          return [formatCurrency(Number(value)), name];
+                        }}
+                        labelFormatter={(label) =>
+                          `Data: ${formatDate(String(label))}`
+                        }
+                      />
+
+                      <Legend />
+
+                      <Line
+                        yAxisId="percent"
+                        type="monotone"
+                        dataKey="volatilityPercent"
+                        name="Volatilidade %"
+                        strokeWidth={2}
+                        dot={false}
+                      />
+
+                      <Line
+                        yAxisId="financial"
+                        type="monotone"
+                        dataKey="volatilityFinancial"
+                        name="Volatilidade em R$"
+                        strokeWidth={2}
+                        dot={false}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+            </section>
+
+            <section className="asset-calendar-card">
+              <div className="asset-chart-header">
+                <div>
+                  <h2>
+                    Calendário{" "}
+                    {analytics.kind === "option" ? "da opção" : "do ativo"}
+                  </h2>
+
+                  <p>
+                    Datas que podem afetar preço, volatilidade e prêmio das
+                    opções.
+                  </p>
+                </div>
+              </div>
+
+              <div className="asset-calendar-list">
+                {analytics.importantDates.map((item) => (
+                  <article
+                    key={item.id}
+                    className={`asset-calendar-item ${item.type}`}
+                  >
+                    <div className="asset-calendar-date">
+                      <strong>{formatDate(item.date)}</strong>
+                      <span>{item.type}</span>
+                    </div>
+
+                    <div>
+                      <h3>{item.title}</h3>
+                      <p>{item.description}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+      </main>
+    </Layout>
   );
 }

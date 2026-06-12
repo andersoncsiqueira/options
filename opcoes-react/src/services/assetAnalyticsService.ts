@@ -4,8 +4,11 @@ import type {
   AssetVolatilityPoint,
 } from "../types/asset";
 
+import { getHistory, getQuote } from "./marketData/marketDataService";
+
 function average(values: number[]): number {
   if (values.length === 0) return 0;
+
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
@@ -64,68 +67,50 @@ function calculateRollingVolatility(
   return result;
 }
 
-/**
- * Mock temporário.
- *
- * Depois essa função pode ser trocada por uma API real, por exemplo:
- * - Brapi
- * - Yahoo Finance via backend
- * - Alpha Vantage
- * - API da sua corretora
- * - Dados manuais importados por CSV
- */
-function generateMockPetrobrasHistory(): AssetCandle[] {
-  const candles: AssetCandle[] = [];
+function normalizeChangePercent(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
 
-  let price = 37.5;
-
-  for (let i = 180; i >= 0; i--) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-
-    const randomReturn = (Math.random() - 0.48) * 0.025;
-    price = price * (1 + randomReturn);
-
-    const open = price * (1 + (Math.random() - 0.5) * 0.01);
-    const high = Math.max(open, price) * (1 + Math.random() * 0.01);
-    const low = Math.min(open, price) * (1 - Math.random() * 0.01);
-
-    candles.push({
-      date: date.toISOString().slice(0, 10),
-      open: Number(open.toFixed(2)),
-      high: Number(high.toFixed(2)),
-      low: Number(low.toFixed(2)),
-      close: Number(price.toFixed(2)),
-      volume: Math.floor(20_000_000 + Math.random() * 60_000_000),
-    });
+  // API pode mandar 0.86 para 0,86%.
+  // A tela normalmente espera 0.0086.
+  if (Math.abs(value) > 1) {
+    return value / 100;
   }
 
-  return candles;
+  return value;
 }
 
 export async function getAssetAnalytics(
   symbol: string
 ): Promise<AssetAnalytics> {
-  const candles = generateMockPetrobrasHistory();
+  const cleanSymbol = symbol.trim().toUpperCase();
+
+  const [quote, candles] = await Promise.all([
+    getQuote(cleanSymbol),
+    getHistory(cleanSymbol, "1y"),
+  ]);
+
+  if (candles.length < 2) {
+    throw new Error(`Histórico insuficiente para ${cleanSymbol}.`);
+  }
 
   const lastCandle = candles[candles.length - 1];
   const previousCandle = candles[candles.length - 2];
 
-  const currentPrice = lastCandle.close;
-  const previousPrice = previousCandle.close;
+  const currentPrice = quote?.price ?? lastCandle.close;
 
-  const dailyChange = currentPrice - previousPrice;
-  const dailyChangePercent = previousPrice
-    ? dailyChange / previousPrice
-    : 0;
+  const dailyChange = quote?.change ?? currentPrice - previousCandle.close;
+
+  const dailyChangePercent =
+    normalizeChangePercent(quote?.changePercent) ??
+    (previousCandle.close ? dailyChange / previousCandle.close : 0);
 
   const annualizedVolatility = calculateAnnualizedVolatility(candles);
   const volatilitySeries = calculateRollingVolatility(candles, 21);
 
   return {
-    symbol,
+    symbol: cleanSymbol,
     currentPrice,
-    previousPrice,
+    previousPrice: previousCandle.close,
     dailyChange,
     dailyChangePercent,
     annualizedVolatility,

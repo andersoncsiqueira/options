@@ -7,32 +7,58 @@ import NewOperationPreview from "../components/NewOperation/NewOperationPreview"
 
 import { useOperationsStore } from "../store/useOperationsStore";
 import { useOperationDraftStore } from "../store/useOperationDraftStore";
-import { useMarketDataStore } from "../store/useMarketDataStore";
+
+import { getQuote } from "../services/marketData/marketDataService";
 
 export default function NewOperationPage() {
   const { id } = useParams();
 
   const getOperationById = useOperationsStore((state) => state.getOperationById);
+
   const loadFromOperation = useOperationDraftStore(
     (state) => state.loadFromOperation
   );
+
   const clear = useOperationDraftStore((state) => state.clear);
-  const prices = useMarketDataStore((state) => state.prices);
 
   const isEditing = Boolean(id);
 
   useEffect(() => {
-    if (!id) {
-      clear();
-      return;
+    let cancelled = false;
+
+    async function loadOperationForEditing() {
+      if (!id) {
+        clear();
+        return;
+      }
+
+      const operation = getOperationById(id);
+
+      if (!operation) return;
+
+      const symbol = operation.symbol.trim().toUpperCase();
+
+      try {
+        const quote = await getQuote(symbol);
+
+        if (cancelled) return;
+
+        loadFromOperation(operation, quote?.price ?? 0);
+      } catch (error) {
+        console.error(`Erro ao buscar preço atual de ${symbol}:`, error);
+
+        if (cancelled) return;
+
+        loadFromOperation(operation, 0);
+      }
     }
 
-    const operation = getOperationById(id);
+    loadOperationForEditing();
 
-    if (!operation) return;
-
-    loadFromOperation(operation, prices[operation.symbol] ?? 100);
-  }, [id, getOperationById, loadFromOperation, clear, prices]);
+    return () => {
+      cancelled = true;
+    };
+  }, [id, getOperationById, loadFromOperation, clear]);
 
   return (
     <Layout>

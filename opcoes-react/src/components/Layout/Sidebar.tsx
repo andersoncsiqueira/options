@@ -13,9 +13,7 @@ export default function Sidebar() {
 
       <NavLink to="/calculator">🧮 Calculadora</NavLink>
 
-      <NavLink to="/simulator">📊 Simulador</NavLink>
-
-      <NavLink to="/settings">⚙️ Configurações</NavLink>
+    
     </aside>
   );
 }

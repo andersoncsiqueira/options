@@ -1,5 +1,6 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Layout from "../components/Layout/Layout";
+import { getHistory, getQuote } from "../services/marketData/marketDataService";
 
 type OptionType = "CALL" | "PUT";
 type LegSide = "BUY" | "SELL";
@@ -121,6 +122,43 @@ const formatPercent = (value: number) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number.isFinite(value) ? value : 0);
+
+function formatDecimalInput(value: number, digits = 2) {
+  return value.toFixed(digits).replace(".", ",");
+}
+
+function calculateAnnualizedVolatilityFromHistory(
+  candles: Array<{ close: number }>
+) {
+  if (candles.length < 2) return null;
+
+  const returns: number[] = [];
+
+  for (let index = 1; index < candles.length; index += 1) {
+    const previousClose = candles[index - 1].close;
+    const currentClose = candles[index].close;
+
+    if (previousClose > 0 && currentClose > 0) {
+      returns.push(Math.log(currentClose / previousClose));
+    }
+  }
+
+  if (returns.length < 2) return null;
+
+  const averageReturn =
+    returns.reduce((total, value) => total + value, 0) / returns.length;
+
+  const variance =
+    returns.reduce((total, value) => {
+      return total + Math.pow(value - averageReturn, 2);
+    }, 0) /
+    (returns.length - 1);
+
+  const dailyVolatility = Math.sqrt(variance);
+  const annualizedVolatility = dailyVolatility * Math.sqrt(252);
+
+  return annualizedVolatility;
+}
 
 const normalCdf = (x: number) => {
   const sign = x < 0 ? -1 : 1;
@@ -617,6 +655,67 @@ export default function CalculatorPage() {
   const [legs, setLegs] = useState<OptionLeg[]>(initialLegs);
   const [lastCalculatedAt, setLastCalculatedAt] = useState<Date | null>(null);
   const [calculationVersion, setCalculationVersion] = useState(0);
+  const [isLoadingAssetData, setIsLoadingAssetData] = useState(false);
+  const [assetDataError, setAssetDataError] = useState("");
+
+  async function loadAssetDataFromApi() {
+    const cleanAsset = asset.trim().toUpperCase();
+
+    if (!cleanAsset) return;
+
+    try {
+      setIsLoadingAssetData(true);
+      setAssetDataError("");
+
+      const [quote, history] = await Promise.all([
+        getQuote(cleanAsset),
+        getHistory(cleanAsset, "1y"),
+      ]);
+
+      if (typeof quote?.price === "number") {
+        setSpot(formatDecimalInput(quote.price, 2));
+      }
+
+      const annualizedVolatility =
+        calculateAnnualizedVolatilityFromHistory(history);
+
+      if (annualizedVolatility !== null) {
+        const volatilityPercent = annualizedVolatility * 100;
+        const volatilityInput = formatDecimalInput(volatilityPercent, 2);
+
+        setDefaultVolatility(volatilityInput);
+
+        setLegs((currentLegs) =>
+          currentLegs.map((leg) => ({
+            ...leg,
+            asset: cleanAsset,
+            volatility: volatilityInput,
+          }))
+        );
+      } else {
+        setLegs((currentLegs) =>
+          currentLegs.map((leg) => ({
+            ...leg,
+            asset: cleanAsset,
+          }))
+        );
+      }
+
+      setAsset(cleanAsset);
+      setCalculationVersion((current) => current + 1);
+      setLastCalculatedAt(new Date());
+    } catch (error) {
+      console.error("Erro ao buscar dados do ativo na API:", error);
+      setAssetDataError("Não foi possível buscar preço e volatilidade pela API.");
+    } finally {
+      setIsLoadingAssetData(false);
+    }
+  }
+
+  useEffect(() => {
+    loadAssetDataFromApi();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const parsedSpot = parseDecimal(spot);
   const parsedRiskFreeRate = parseDecimal(riskFreeRate);
@@ -842,27 +941,27 @@ export default function CalculatorPage() {
   };
 
   const useImpliedVolatilityInLeg = (id: string) => {
-  const valuation = valuationByLeg.find((item) => item.leg.id === id);
+    const valuation = valuationByLeg.find((item) => item.leg.id === id);
 
-  if (!valuation || valuation.impliedVolatility === null) return;
+    if (!valuation || valuation.impliedVolatility === null) return;
 
-  const impliedVolatility = valuation.impliedVolatility;
+    const impliedVolatility = valuation.impliedVolatility;
 
-  setLegs((currentLegs) =>
-    currentLegs.map((leg) =>
-      leg.id === id
-        ? {
-            ...leg,
-            volatility: (impliedVolatility * 100)
-              .toFixed(2)
-              .replace(".", ","),
-          }
-        : leg
-    )
-  );
+    setLegs((currentLegs) =>
+      currentLegs.map((leg) =>
+        leg.id === id
+          ? {
+              ...leg,
+              volatility: (impliedVolatility * 100)
+                .toFixed(2)
+                .replace(".", ","),
+            }
+          : leg
+      )
+    );
 
-  setLastCalculatedAt(new Date());
-};
+    setLastCalculatedAt(new Date());
+  };
 
   const applyDefaultVolatilityToAllLegs = () => {
     setLegs((currentLegs) =>
@@ -1043,10 +1142,25 @@ export default function CalculatorPage() {
               <button
                 style={styles.secondaryButton}
                 type="button"
+                onClick={loadAssetDataFromApi}
+                disabled={isLoadingAssetData}
+              >
+                {isLoadingAssetData
+                  ? "Buscando dados da API..."
+                  : "Buscar preço e volatilidade pela API"}
+              </button>
+
+              <button
+                style={styles.secondaryButton}
+                type="button"
                 onClick={applyDefaultVolatilityToAllLegs}
               >
                 Aplicar volatilidade padrão nas pernas
               </button>
+
+              {assetDataError && (
+                <span style={styles.errorText}>{assetDataError}</span>
+              )}
             </div>
           </div>
 
@@ -1623,6 +1737,14 @@ const styles: Record<string, CSSProperties> = {
     marginTop: "16px",
     display: "flex",
     justifyContent: "flex-end",
+    alignItems: "center",
+    gap: "10px",
+    flexWrap: "wrap",
+  },
+
+  errorText: {
+    color: "#fecaca",
+    fontSize: "13px",
   },
 
   summaryGrid: {
