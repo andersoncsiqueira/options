@@ -8,8 +8,6 @@ import {
   getOptionsChain,
 } from "../services/optionsMarketApi";
 
-import { countBusinessDays } from "../services/blackScholes";
-
 type OptionType = "CALL" | "PUT";
 type OptionTypeFilter = "all" | "call" | "put";
 type ValuationStatus = "CHEAP" | "EXPENSIVE" | "FAIR";
@@ -42,7 +40,7 @@ type BlackScholesResult = {
 };
 
 const DEFAULT_ASSET = "PETR4";
-const DEFAULT_RISK_FREE_RATE = "14,5";
+const DEFAULT_RISK_FREE_RATE = "1,5";
 const DEFAULT_VOLATILITY = "35";
 const DEFAULT_DIVIDEND_YIELD = "0";
 const DEFAULT_FAIR_VALUE_THRESHOLD = "5";
@@ -164,22 +162,16 @@ function normalizeDateForInput(value: unknown): string {
   return date.toISOString().slice(0, 10);
 }
 
-function getBusinessDaysToExpiration(expirationDate: string): number {
-  if (!expirationDate) return 0;
+function getDaysToExpiration(expirationDate: string): number {
+  if (!expirationDate) return 1;
 
-  try {
-    /*
-     * A função centralizada:
-     * - não conta o dia de hoje;
-     * - inclui o vencimento, quando ele é dia útil;
-     * - exclui sábados e domingos;
-     * - pode receber os feriados da B3 como terceiro argumento.
-     */
-    return countBusinessDays(todayAsInputDate(), expirationDate);
-  } catch (error) {
-    console.error("Erro ao calcular dias úteis até o vencimento:", error);
-    return 0;
-  }
+  const today = new Date(`${todayAsInputDate()}T00:00:00`);
+  const expiration = new Date(`${expirationDate}T23:59:59`);
+
+  const diffMs = expiration.getTime() - today.getTime();
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+  return Math.max(diffDays, 1);
 }
 
 function formatCurrency(value: number): string {
@@ -285,31 +277,10 @@ function blackScholes(params: {
 
   const safeSpot = Math.max(spot, 0.01);
   const safeStrike = Math.max(strike, 0.01);
-  const businessDays = Math.max(Math.floor(daysToExpiration), 0);
+  const time = Math.max(daysToExpiration, 1) / 252;
   const sigma = Math.max(volatility, 0.0001);
   const rate = riskFreeRate;
   const dividend = dividendYield;
-
-  if (businessDays <= 0) {
-    const intrinsicValue =
-      type === "CALL"
-        ? Math.max(safeSpot - safeStrike, 0)
-        : Math.max(safeStrike - safeSpot, 0);
-
-    return {
-      price: intrinsicValue,
-      delta: 0,
-      gamma: 0,
-      vega: 0,
-      theta: 0,
-      rho: 0,
-      d1: 0,
-      d2: 0,
-    };
-  }
-
-  // Convenção consistente: dias úteis restantes divididos por 252 pregões.
-  const time = businessDays / 252;
   const sqrtTime = Math.sqrt(time);
 
   const d1 =
@@ -393,12 +364,7 @@ function calculateImpliedVolatility(params: {
   const safeStrike = Math.max(strike, 0);
   const safeMarketPremium = Math.max(marketPremium, 0);
 
-  if (
-    safeMarketPremium <= 0 ||
-    safeSpot <= 0 ||
-    safeStrike <= 0 ||
-    daysToExpiration <= 0
-  ) {
+  if (safeMarketPremium <= 0 || safeSpot <= 0 || safeStrike <= 0) {
     return null;
   }
 
@@ -801,7 +767,7 @@ export default function CalculatorPage() {
   const parsedQuantity = Math.max(Math.floor(parseDecimal(quantity)), 1);
 
   const daysToExpiration = useMemo(
-    () => getBusinessDaysToExpiration(expirationDate),
+    () => getDaysToExpiration(expirationDate),
     [expirationDate]
   );
 
@@ -1406,15 +1372,12 @@ export default function CalculatorPage() {
               </label>
 
               <label style={styles.label}>
-                Dias úteis até o vencimento
+                Dias até o vencimento
                 <input
                   style={{ ...styles.input, opacity: 0.72 }}
                   value={daysToExpiration}
                   readOnly
                 />
-                <small style={styles.fieldHint}>
-                  Base temporal usada: {daysToExpiration}/252 pregões
-                </small>
               </label>
 
               <label style={styles.label}>
@@ -1478,8 +1441,8 @@ export default function CalculatorPage() {
 
             {!hasEnoughData && (
               <div style={styles.warningBox}>
-                Preencha preço do ativo, strike, volatilidade e um vencimento
-                futuro com pelo menos um dia útil restante.
+                Preencha preço do ativo, strike, volatilidade e vencimento para
+                o cálculo ficar completo.
               </div>
             )}
           </div>
@@ -1959,13 +1922,6 @@ const styles: Record<string, CSSProperties> = {
     padding: "0 14px",
     fontSize: "15px",
     fontWeight: 700,
-  },
-
-  fieldHint: {
-    color: "var(--text-muted, #94a3b8)",
-    fontSize: "11px",
-    fontWeight: 500,
-    lineHeight: 1.35,
   },
 
   resultHeader: {

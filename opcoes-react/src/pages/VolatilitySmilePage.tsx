@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useMemo,
   useState,
   type CSSProperties,
@@ -26,20 +25,12 @@ import {
 type OptionType = "call" | "put";
 type OptionSource = "automatic" | "manual";
 type ApiRecord = Record<string, unknown>;
-type DebugLevel = "info" | "success" | "warning" | "error";
-
-type DebugEntry = {
-  id: string;
-  timestamp: string;
-  level: DebugLevel;
+type DebugLogger = (entry: {
+  level: "info" | "success" | "warning" | "error";
   step: string;
   message: string;
   data?: unknown;
-};
-
-type DebugLogger = (
-  entry: Omit<DebugEntry, "id" | "timestamp">
-) => void;
+}) => void;
 
 type OptionChainItem = {
   symbol: string;
@@ -107,65 +98,6 @@ function errorToDebugData(error: unknown): unknown {
   }
 
   return error;
-}
-
-function stringifyDebugData(value: unknown): string {
-  if (value === undefined) return "";
-
-  const seen = new WeakSet<object>();
-
-  try {
-    const result = JSON.stringify(
-      value,
-      (_key, currentValue) => {
-        if (currentValue instanceof Error) {
-          return errorToDebugData(currentValue);
-        }
-
-        if (
-          typeof currentValue === "object" &&
-          currentValue !== null
-        ) {
-          if (seen.has(currentValue)) {
-            return "[Referência circular]";
-          }
-
-          seen.add(currentValue);
-        }
-
-        return currentValue;
-      },
-      2
-    );
-
-    if (!result) return String(value);
-
-    const maximumLength = 30000;
-
-    return result.length > maximumLength
-      ? `${result.slice(0, maximumLength)}\n... conteúdo cortado ...`
-      : result;
-  } catch {
-    return String(value);
-  }
-}
-
-function formatDebugEntries(entries: DebugEntry[]): string {
-  if (!entries.length) {
-    return "Nenhuma etapa registrada ainda.";
-  }
-
-  return entries
-    .map((entry) => {
-      const header = `[${entry.timestamp}] [${entry.level.toUpperCase()}] ${entry.step}`;
-      const message = entry.message;
-      const data = stringifyDebugData(entry.data);
-
-      return data
-        ? `${header}\n${message}\n${data}`
-        : `${header}\n${message}`;
-    })
-    .join("\n\n----------------------------------------\n\n");
 }
 
 function isRecord(value: unknown): value is ApiRecord {
@@ -967,13 +899,13 @@ async function resolveOptionByCode(
 
   if (strike === undefined || strike <= 0) {
     throw new Error(
-      `Não encontrei o strike de ${cleanCode}. Consulte o painel de diagnóstico abaixo.`
+      `Não encontrei o strike de ${cleanCode}. Verifique o código da opção e tente novamente.`
     );
   }
 
   if (premium === undefined || premium <= 0) {
     throw new Error(
-      `Não encontrei o prêmio de mercado de ${cleanCode}. Consulte o painel de diagnóstico abaixo.`
+      `Não encontrei o prêmio de mercado de ${cleanCode}. Você pode informar o prêmio manualmente após a busca.`
     );
   }
 
@@ -1352,41 +1284,7 @@ export default function VolatilitySmilePage() {
   const [loadingCurve, setLoadingCurve] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [debugEntries, setDebugEntries] = useState<DebugEntry[]>([]);
-  const [showDebug, setShowDebug] = useState(true);
-  const [copyStatus, setCopyStatus] = useState("");
-
-  const addDebug = useCallback<DebugLogger>((entry) => {
-    setDebugEntries((current) => [
-      ...current,
-      {
-        ...entry,
-        id: crypto.randomUUID(),
-        timestamp: new Date().toLocaleTimeString("pt-BR"),
-      },
-    ].slice(-120));
-  }, []);
-
-  const clearDebug = useCallback(() => {
-    setDebugEntries([]);
-    setCopyStatus("");
-  }, []);
-
-  const debugText = useMemo(
-    () => formatDebugEntries(debugEntries),
-    [debugEntries]
-  );
-
-  const copyDebug = async () => {
-    try {
-      await navigator.clipboard.writeText(debugText);
-      setCopyStatus("Diagnóstico copiado.");
-    } catch {
-      setCopyStatus(
-        "Não consegui copiar automaticamente. Selecione o texto do campo."
-      );
-    }
-  };
+  const addDebug: DebugLogger = () => undefined;
 
   const volatility = Math.max(toNumber(baseVolatility) || 0, 0);
 
@@ -1545,8 +1443,6 @@ export default function VolatilitySmilePage() {
     setError("");
     setNotice("");
     setReferenceDraft(null);
-    clearDebug();
-    setShowDebug(true);
 
     addDebug({
       level: "info",
@@ -1597,8 +1493,7 @@ export default function VolatilitySmilePage() {
         data: errorToDebugData(caughtError),
       });
 
-      setShowDebug(true);
-      setError(
+        setError(
         caughtError instanceof Error
           ? caughtError.message
           : "Não foi possível buscar a opção de referência."
@@ -1637,8 +1532,6 @@ export default function VolatilitySmilePage() {
     setError("");
     setNotice("");
     setManualDraft(null);
-    clearDebug();
-    setShowDebug(true);
 
     addDebug({
       level: "info",
@@ -1678,8 +1571,7 @@ export default function VolatilitySmilePage() {
         data: errorToDebugData(caughtError),
       });
 
-      setShowDebug(true);
-      setError(
+        setError(
         caughtError instanceof Error
           ? caughtError.message
           : "Não foi possível buscar a opção."
@@ -1716,10 +1608,48 @@ export default function VolatilitySmilePage() {
     }
   };
 
+  const handleMarketPriceChange = (
+    optionId: string,
+    value: string
+  ) => {
+    const marketPrice = toNumber(value);
+
+    if (marketPrice === undefined || marketPrice <= 0) {
+      return;
+    }
+
+    setOptions((current) =>
+      current.map((option) => {
+        if (option.id !== optionId) {
+          return option;
+        }
+
+        const recalculated = calculateSmileOption(
+          {
+            optionCode: option.optionCode,
+            underlying: option.underlying,
+            optionType: option.optionType,
+            strike: option.strike,
+            expirationDate: option.expirationDate,
+            marketPrice,
+            spotPrice: option.spotPrice,
+          },
+          volatility,
+          option.source
+        );
+
+        return {
+          ...recalculated,
+          id: option.id,
+        };
+      })
+    );
+  };
+
   const handleRecalculate = () => {
     setOptions((current) =>
-      current.map((option) =>
-        calculateSmileOption(
+      current.map((option) => {
+        const recalculated = calculateSmileOption(
           {
             optionCode: option.optionCode,
             underlying: option.underlying,
@@ -1731,8 +1661,13 @@ export default function VolatilitySmilePage() {
           },
           volatility,
           option.source
-        )
-      )
+        );
+
+        return {
+          ...recalculated,
+          id: option.id,
+        };
+      })
     );
   };
 
@@ -1848,8 +1783,23 @@ export default function VolatilitySmilePage() {
       </label>
 
       <label style={styles.label}>
-        Prêmio de mercado encontrado
-        <input style={styles.readonly} value={draft.marketPrice} readOnly />
+        Prêmio de mercado (editável)
+        <input
+          style={styles.input}
+          inputMode="decimal"
+          value={draft.marketPrice}
+          onChange={(event) =>
+            setDraft((current) =>
+              current
+                ? {
+                    ...current,
+                    marketPrice: event.target.value,
+                  }
+                : current
+            )
+          }
+          placeholder="Ex.: 0,44"
+        />
       </label>
 
       <label style={styles.label}>
@@ -2138,104 +2088,6 @@ export default function VolatilitySmilePage() {
         )}
 
         <section style={styles.card}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <h2 style={{ margin: 0 }}>Painel de diagnóstico</h2>
-              <p
-                style={{
-                  margin: "5px 0 0",
-                  color: "#64748b",
-                  fontSize: 13,
-                }}
-              >
-                Mostra as respostas brutas e como cada campo foi
-                reconhecido. Copie este conteúdo quando a busca falhar.
-              </p>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                flexWrap: "wrap",
-              }}
-            >
-              <button
-                type="button"
-                style={styles.secondaryButton}
-                onClick={() => setShowDebug((current) => !current)}
-              >
-                {showDebug ? "Ocultar diagnóstico" : "Mostrar diagnóstico"}
-              </button>
-
-              <button
-                type="button"
-                style={styles.secondaryButton}
-                onClick={() => void copyDebug()}
-                disabled={!debugEntries.length}
-              >
-                Copiar diagnóstico
-              </button>
-
-              <button
-                type="button"
-                style={styles.secondaryButton}
-                onClick={clearDebug}
-                disabled={!debugEntries.length}
-              >
-                Limpar
-              </button>
-            </div>
-          </div>
-
-          {copyStatus && (
-            <div
-              style={{
-                marginTop: 10,
-                color: "#1d4ed8",
-                fontSize: 13,
-              }}
-            >
-              {copyStatus}
-            </div>
-          )}
-
-          {showDebug && (
-            <textarea
-              readOnly
-              spellCheck={false}
-              value={debugText}
-              style={{
-                width: "100%",
-                minHeight: 300,
-                boxSizing: "border-box",
-                marginTop: 12,
-                padding: 12,
-                resize: "vertical",
-                borderRadius: 8,
-                border: "1px solid #334155",
-                background: "#0f172a",
-                color: "#e2e8f0",
-                WebkitTextFillColor: "#e2e8f0",
-                fontFamily:
-                  "Consolas, 'Courier New', monospace",
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: "pre-wrap",
-              }}
-            />
-          )}
-        </section>
-
-        <section style={styles.card}>
           <h2 style={{ margin: "0 0 10px" }}>
             Curva de volatilidade implícita
           </h2>
@@ -2311,9 +2163,7 @@ export default function VolatilitySmilePage() {
                   }}
                   formatter={(value, name) => [
                     formatCurrency(Number(value)),
-                    name === "marketPrice"
-                      ? "Preço de mercado"
-                      : "Preço teórico",
+                    String(name),
                   ]}
                 />
                 <Legend />
@@ -2337,7 +2187,17 @@ export default function VolatilitySmilePage() {
         </section>
 
         <section style={styles.card}>
-          <h2 style={{ margin: "0 0 10px" }}>Opções analisadas</h2>
+          <h2 style={{ margin: "0 0 4px" }}>Opções analisadas</h2>
+          <p
+            style={{
+              margin: "0 0 12px",
+              color: "#64748b",
+              fontSize: 13,
+            }}
+          >
+            Altere o preço de mercado diretamente na tabela. A volatilidade
+            implícita e os gráficos são recalculados automaticamente.
+          </p>
 
           <div style={{ overflowX: "auto" }}>
             <table
@@ -2353,7 +2213,7 @@ export default function VolatilitySmilePage() {
                     "Código",
                     "Tipo",
                     "Strike",
-                    "Mercado",
+                    "Mercado (editável)",
                     "Teórico",
                     "Diferença",
                     "IV",
@@ -2385,8 +2245,23 @@ export default function VolatilitySmilePage() {
                     <td style={{ padding: 10 }}>
                       {formatCurrency(option.strike)}
                     </td>
-                    <td style={{ padding: 10 }}>
-                      {formatCurrency(option.marketPrice)}
+                    <td style={{ padding: 10, minWidth: 135 }}>
+                      <input
+                        style={{
+                          ...styles.input,
+                          minHeight: 34,
+                          padding: "6px 8px",
+                        }}
+                        inputMode="decimal"
+                        defaultValue={toInputNumber(option.marketPrice)}
+                        onChange={(event) =>
+                          handleMarketPriceChange(
+                            option.id,
+                            event.target.value
+                          )
+                        }
+                        aria-label={`Preço de mercado de ${option.optionCode}`}
+                      />
                     </td>
                     <td style={{ padding: 10 }}>
                       {formatCurrency(option.theoreticalPrice)}
