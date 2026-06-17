@@ -39,7 +39,7 @@ export function buildOperationViewModel(
       optionType: leg.optionType,
       S: currentPrice,
       K: leg.strike,
-      T: daysToExpiration / 365,
+      T: daysToExpiration / 252,
       r: operation.riskFreeRate,
       sigma: operation.volatility,
     });

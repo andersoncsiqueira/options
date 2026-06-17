@@ -25,7 +25,7 @@ const manualQuotes: Record<string, Quote> = {
 function getDaysByRange(range: HistoryRange): number {
   if (range === "1w") return 7;
   if (range === "1m") return 30;
-  return 365;
+  return 252;
 }
 
 function generateManualHistory(
