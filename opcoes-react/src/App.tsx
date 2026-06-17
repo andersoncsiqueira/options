@@ -13,15 +13,14 @@ import CalculatorPage from "./pages/CalculatorPage";
 import SettingsPage from "./pages/SettingsPage";
 import NewOperationPage from "./pages/NewOperationPage";
 import AssetAnalysisPage from "./pages/AssetAnalysisPage";
+import VolatilitySmilePage from "./pages/VolatilitySmilePage";
 
 import { useOperationsStore } from "./store/useOperationsStore";
 
 function App() {
-  const initializeOperations =
-    useOperationsStore(
-      (state) =>
-        state.initialize
-    );
+  const initializeOperations = useOperationsStore(
+    (state) => state.initialize
+  );
 
   useEffect(() => {
     void initializeOperations();
@@ -30,10 +29,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route
-          path="/"
-          element={<DashboardPage />}
-        />
+        <Route path="/" element={<DashboardPage />} />
 
         <Route
           path="/portfolio"
@@ -56,10 +52,13 @@ function App() {
         />
 
         <Route
+          path="/volatility-smile"
+          element={<VolatilitySmilePage />}
+        />
+
+        <Route
           path="/simulator"
-          element={
-            <div>Simulador</div>
-          }
+          element={<div>Simulador</div>}
         />
 
         <Route
@@ -74,12 +73,7 @@ function App() {
 
         <Route
           path="*"
-          element={
-            <Navigate
-              to="/"
-              replace
-            />
-          }
+          element={<Navigate to="/" replace />}
         />
       </Routes>
     </BrowserRouter>
