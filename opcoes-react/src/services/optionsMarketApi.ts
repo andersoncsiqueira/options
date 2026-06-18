@@ -8,6 +8,32 @@ export type ApiHealthResponse = {
   updatedAt: string;
 };
 
+export type OptionMarketData = {
+  symbol: string;
+  underlying?: string;
+  type?: "call" | "put";
+  strike?: number;
+  expirationDate?: string;
+  lastPrice?: number;
+  bid?: number;
+  ask?: number;
+  volume?: number;
+  financialVolume?: number;
+  trades?: number;
+  quoteUpdatedAt?: string;
+  [key: string]: unknown;
+};
+
+export type OptionsChainResponse =
+  | OptionMarketData[]
+  | {
+      data?: unknown;
+      options?: unknown;
+      calls?: unknown;
+      puts?: unknown;
+      [key: string]: unknown;
+    };
+
 async function apiRequest<T>(endpoint: string): Promise<T> {
   if (!API_BASE_URL) {
     throw new Error("VITE_OPTIONS_API_URL não configurada no .env.local");
@@ -57,7 +83,7 @@ export function getAssetEvents(symbol: string) {
   return apiRequest(`/api/market-data/${normalizedSymbol}/events`);
 }
 
-export function getOptionBySymbol(optionSymbol: string) {
+export function getOptionBySymbol(optionSymbol: string): Promise<OptionMarketData | unknown> {
   const normalizedSymbol = normalizeSymbol(optionSymbol);
 
   return apiRequest(`/api/options/${normalizedSymbol}`);
@@ -74,7 +100,7 @@ export function getOptionHistory(
   );
 }
 
-export function getOptionsChain(underlying: string) {
+export function getOptionsChain(underlying: string): Promise<OptionsChainResponse> {
   const normalizedUnderlying = normalizeSymbol(underlying);
 
   return apiRequest(`/api/options-chain/${normalizedUnderlying}`);

@@ -5,10 +5,13 @@ import {
   type FormEvent,
 } from "react";
 import {
+  Bar,
   CartesianGrid,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -42,7 +45,9 @@ type OptionChainItem = {
   bid?: number;
   ask?: number;
   volume?: number;
+  financialVolume?: number;
   trades?: number;
+  quoteUpdatedAt?: string;
   raw: unknown;
 };
 
@@ -57,7 +62,9 @@ type ResolvedOption = {
   bid?: number;
   ask?: number;
   volume?: number;
+  financialVolume?: number;
   trades?: number;
+  quoteUpdatedAt?: string;
 };
 
 type OptionDraft = {
@@ -68,6 +75,39 @@ type OptionDraft = {
   expirationDate: string;
   marketPrice: string;
   spotPrice: string;
+  bid?: number;
+  ask?: number;
+  volume?: number;
+  financialVolume?: number;
+  trades?: number;
+  quoteUpdatedAt?: string;
+};
+
+type FreshOptionData = {
+  lastPrice?: number;
+  bid?: number;
+  ask?: number;
+  volume?: number;
+  financialVolume?: number;
+  trades?: number;
+  quoteUpdatedAt?: string;
+};
+
+type SmileChartItem = {
+  strike: number;
+  optionCode: string;
+  impliedVolatility: number | null;
+  marketPrice: number;
+  theoreticalPrice: number;
+  bid: number | null;
+  ask: number | null;
+  spread: number | null;
+  spreadPercent: number | null;
+  volume: number | null;
+  trades: number | null;
+  averageVolumePerTrade: number | null;
+  financialVolume: number | null;
+  quoteUpdatedAt: string | null;
 };
 
 type SmileOption = ResolvedOption & {
@@ -196,6 +236,39 @@ function toNumber(value: unknown): number | undefined {
   const parsed = Number(normalized);
 
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function toCount(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 && Number.isInteger(value)
+      ? value
+      : undefined;
+  }
+  let text = String(value).trim().replace(/\s/g, "");
+  if (!text) return undefined;
+  if (/^-/.test(text)) return undefined;
+  if (/^\d{1,3}(\.\d{3})+$/.test(text)) text = text.replace(/\./g, "");
+  else if (/^\d{1,3}(,\d{3})+$/.test(text)) text = text.replace(/,/g, "");
+  else if (!/^[0-9]+$/.test(text)) return undefined;
+  const parsed = Number(text);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function normalizeTimestamp(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value > 10_000_000_000 ? value : value * 1000;
+    const date = new Date(millis);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+  }
+  const text = String(value).trim();
+  if (!text) return undefined;
+  if (/^\d+$/.test(text)) return normalizeTimestamp(Number(text));
+  const br = text.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:[ T](\d{2}:\d{2}(?::\d{2})?))?/);
+  const normalized = br ? `${br[3]}-${br[2]}-${br[1]}T${br[4] || "00:00:00"}-03:00` : text;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function toInputNumber(value: number | undefined): string {
@@ -365,6 +438,14 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "quantidadeNegociada",
   ];
 
+  const financialVolumeKeys = [
+    "financialVolume",
+    "financial_volume",
+    "volumeFinanceiro",
+    "volume_financeiro",
+    "turnover",
+  ];
+
   const tradesKeys = [
     "trades",
     "tradeCount",
@@ -376,6 +457,22 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "numeroNegocios",
     "numero_negocios",
     "qtdNegocios",
+    "quantidadeNegocios",
+    "transactions",
+    "deals",
+    "businesses",
+  ];
+
+  const quoteUpdatedAtKeys = [
+    "quoteUpdatedAt",
+    "updatedAt",
+    "lastUpdate",
+    "lastTradeTime",
+    "regularMarketTime",
+    "timestamp",
+    "datetime",
+    "dataHora",
+    "horario",
   ];
 
   return {
@@ -431,13 +528,21 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
       readFirst(rawOption, askKeys) ??
         readFirst(quote, askKeys)
     ),
-    volume: toNumber(
+    volume: toCount(
       readFirst(rawOption, volumeKeys) ??
         readFirst(quote, volumeKeys)
     ),
-    trades: toNumber(
+    financialVolume: toNumber(
+      readFirst(rawOption, financialVolumeKeys) ??
+        readFirst(quote, financialVolumeKeys)
+    ),
+    trades: toCount(
       readFirst(rawOption, tradesKeys) ??
         readFirst(quote, tradesKeys)
+    ),
+    quoteUpdatedAt: normalizeTimestamp(
+      readFirst(rawOption, quoteUpdatedAtKeys) ??
+        readFirst(quote, quoteUpdatedAtKeys)
     ),
     raw: rawOption,
   };
@@ -608,10 +713,10 @@ function findOptionInChain(
   return prefixMatches[0];
 }
 
-async function getFreshOptionMarketData(
+async function getFreshOptionData(
   optionCode: string,
   debug?: DebugLogger
-): Promise<OptionChainItem | undefined> {
+): Promise<FreshOptionData | undefined> {
   const cleanCode = optionCode.trim().toUpperCase();
 
   debug?.({
@@ -650,17 +755,18 @@ async function getFreshOptionMarketData(
     });
 
     if (normalized) {
-      return normalized;
+      return {
+        lastPrice: getPremiumFromOption(normalized),
+        bid: normalized.bid,
+        ask: normalized.ask,
+        volume: normalized.volume,
+        financialVolume: normalized.financialVolume,
+        trades: normalized.trades,
+        quoteUpdatedAt: normalized.quoteUpdatedAt,
+      };
     }
 
-    return price !== undefined && price > 0
-      ? {
-          symbol: cleanCode,
-          type: inferOptionType(cleanCode),
-          lastPrice: price,
-          raw: response,
-        }
-      : undefined;
+    return price !== undefined && price > 0 ? { lastPrice: price } : undefined;
   } catch (error) {
     debug?.({
       level: "error",
@@ -741,7 +847,7 @@ async function resolveOptionByCode(
 ): Promise<{
   option: OptionChainItem;
   chain: OptionChainItem[];
-  premium: number;
+  premium?: number;
   spotPrice?: number;
 }> {
   const cleanCode = optionCode.trim().toUpperCase();
@@ -890,14 +996,12 @@ async function resolveOptionByCode(
     ? getPremiumFromOption(metadata)
     : undefined;
 
-  let freshMarketData: OptionChainItem | undefined;
+  let freshMarketData: FreshOptionData | undefined;
   let freshPremium: number | undefined;
 
   if (metadataPremium === undefined && chainPremium === undefined) {
-    freshMarketData = await getFreshOptionMarketData(cleanCode, debug);
-    freshPremium = freshMarketData
-      ? getPremiumFromOption(freshMarketData)
-      : undefined;
+    freshMarketData = await getFreshOptionData(cleanCode, debug);
+    freshPremium = freshMarketData?.lastPrice;
   } else {
     debug?.({
       level: "success",
@@ -955,12 +1059,6 @@ async function resolveOptionByCode(
     );
   }
 
-  if (premium === undefined || premium <= 0) {
-    throw new Error(
-      `Não encontrei o prêmio de mercado de ${cleanCode}. Você pode informar o prêmio manualmente após a busca.`
-    );
-  }
-
   const mergedOption: OptionChainItem = {
     symbol: cleanCode,
     underlying:
@@ -978,7 +1076,11 @@ async function resolveOptionByCode(
     bid: chainOption?.bid ?? metadata?.bid ?? freshMarketData?.bid,
     ask: chainOption?.ask ?? metadata?.ask ?? freshMarketData?.ask,
     volume: chainOption?.volume ?? metadata?.volume ?? freshMarketData?.volume,
+    financialVolume:
+      chainOption?.financialVolume ?? metadata?.financialVolume ?? freshMarketData?.financialVolume,
     trades: chainOption?.trades ?? metadata?.trades ?? freshMarketData?.trades,
+    quoteUpdatedAt:
+      chainOption?.quoteUpdatedAt ?? metadata?.quoteUpdatedAt ?? freshMarketData?.quoteUpdatedAt,
     raw: {
       metadataResponse,
       chainOption: chainOption?.raw,
@@ -1232,7 +1334,7 @@ function chooseOptionsBySpacing(
 
 function optionToDraft(
   option: OptionChainItem,
-  premium: number,
+  premium: number | undefined,
   spotPrice?: number
 ): OptionDraft {
   const type =
@@ -1254,6 +1356,12 @@ function optionToDraft(
     expirationDate: option.expirationDate || "",
     marketPrice: toInputNumber(premium),
     spotPrice: toInputNumber(spotPrice),
+    bid: option.bid,
+    ask: option.ask,
+    volume: option.volume,
+    financialVolume: option.financialVolume,
+    trades: option.trades,
+    quoteUpdatedAt: option.quoteUpdatedAt,
   };
 }
 
@@ -1290,6 +1398,12 @@ function draftToResolvedOption(draft: OptionDraft): ResolvedOption {
     expirationDate: draft.expirationDate,
     marketPrice,
     spotPrice,
+    bid: draft.bid,
+    ask: draft.ask,
+    volume: draft.volume,
+    financialVolume: draft.financialVolume,
+    trades: draft.trades,
+    quoteUpdatedAt: draft.quoteUpdatedAt,
   };
 }
 
@@ -1313,6 +1427,53 @@ function formatPercent(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
 
   return `${(value * 100).toFixed(2)}%`;
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function formatOptionalCurrency(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value)
+    ? "—"
+    : formatCurrency(value);
+}
+
+function formatOptionalNumber(value: number | null | undefined): string {
+  return value === null || value === undefined || !Number.isFinite(value)
+    ? "—"
+    : formatNumber(value);
+}
+
+function calculateSpreadData(
+  bid?: number,
+  ask?: number
+): { spread: number | null; spreadPercent: number | null } {
+  if (
+    bid === undefined ||
+    ask === undefined ||
+    !Number.isFinite(bid) ||
+    !Number.isFinite(ask) ||
+    bid <= 0 ||
+    ask <= 0 ||
+    ask < bid
+  ) {
+    return { spread: null, spreadPercent: null };
+  }
+
+  const spread = ask - bid;
+  const midpoint = (ask + bid) / 2;
+
+  return {
+    spread,
+    spreadPercent: midpoint > 0 ? (spread / midpoint) * 100 : null,
+  };
 }
 
 function uniqueSmileOptions(options: SmileOption[]): SmileOption[] {
@@ -1344,6 +1505,7 @@ export default function VolatilitySmilePage() {
   const [loadingReference, setLoadingReference] = useState(false);
   const [loadingManual, setLoadingManual] = useState(false);
   const [loadingCurve, setLoadingCurve] = useState(false);
+  const [loadingLiquidity, setLoadingLiquidity] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const addDebug: DebugLogger = () => undefined;
@@ -1369,7 +1531,9 @@ export default function VolatilitySmilePage() {
         bid: reference.bid,
         ask: reference.ask,
         volume: reference.volume,
+        financialVolume: reference.financialVolume,
         trades: reference.trades,
+        quoteUpdatedAt: reference.quoteUpdatedAt,
         raw: reference,
       };
 
@@ -1434,12 +1598,12 @@ export default function VolatilitySmilePage() {
 
           const freshMarketData = isReference
             ? undefined
-            : await getFreshOptionMarketData(chainOption.symbol, addDebug);
-          const marketData = freshMarketData ?? chainOption;
+            : await getFreshOptionData(chainOption.symbol, addDebug);
+          const marketData = freshMarketData;
 
           const marketPrice =
             (isReference ? reference.marketPrice : undefined) ??
-            getPremiumFromOption(marketData) ??
+            marketData?.lastPrice ??
             getPremiumFromOption(chainOption) ??
             0;
 
@@ -1457,10 +1621,18 @@ export default function VolatilitySmilePage() {
               reference.expirationDate,
             marketPrice,
             spotPrice: reference.spotPrice,
-            bid: marketData.bid ?? reference.bid,
-            ask: marketData.ask ?? reference.ask,
-            volume: marketData.volume ?? reference.volume,
-            trades: marketData.trades ?? reference.trades,
+            bid: marketData?.bid ?? chainOption.bid ?? (isReference ? reference.bid : undefined),
+            ask: marketData?.ask ?? chainOption.ask ?? (isReference ? reference.ask : undefined),
+            volume: marketData?.volume ?? chainOption.volume ?? (isReference ? reference.volume : undefined),
+            financialVolume:
+              marketData?.financialVolume ??
+              chainOption.financialVolume ??
+              (isReference ? reference.financialVolume : undefined),
+            trades: marketData?.trades ?? chainOption.trades ?? (isReference ? reference.trades : undefined),
+            quoteUpdatedAt:
+              marketData?.quoteUpdatedAt ??
+              chainOption.quoteUpdatedAt ??
+              (isReference ? reference.quoteUpdatedAt : undefined),
           };
 
           return calculateSmileOption(
@@ -1710,7 +1882,9 @@ export default function VolatilitySmilePage() {
             bid: option.bid,
             ask: option.ask,
             volume: option.volume,
+            financialVolume: option.financialVolume,
             trades: option.trades,
+            quoteUpdatedAt: option.quoteUpdatedAt,
           },
           volatility,
           option.source
@@ -1739,7 +1913,9 @@ export default function VolatilitySmilePage() {
             bid: option.bid,
             ask: option.ask,
             volume: option.volume,
+            financialVolume: option.financialVolume,
             trades: option.trades,
+            quoteUpdatedAt: option.quoteUpdatedAt,
           },
           volatility,
           option.source
@@ -1753,23 +1929,152 @@ export default function VolatilitySmilePage() {
     );
   };
 
-  const chartData = useMemo(
+  const handleRefreshLiquidity = async () => {
+    if (!options.length) return;
+
+    setLoadingLiquidity(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const refreshed = await Promise.all(
+        options.map(async (option) => {
+          const freshData = await getFreshOptionData(option.optionCode);
+
+          return {
+            ...option,
+            bid: freshData?.bid ?? option.bid,
+            ask: freshData?.ask ?? option.ask,
+            volume: freshData?.volume ?? option.volume,
+            financialVolume:
+              freshData?.financialVolume ?? option.financialVolume,
+            trades: freshData?.trades ?? option.trades,
+            quoteUpdatedAt:
+              freshData?.quoteUpdatedAt ?? option.quoteUpdatedAt,
+          };
+        })
+      );
+
+      setOptions(refreshed);
+
+      const volumeCoverage = refreshed.filter(
+        (option) => option.volume !== undefined
+      ).length;
+      const tradesCoverage = refreshed.filter(
+        (option) => option.trades !== undefined
+      ).length;
+      const bidAskCoverage = refreshed.filter(
+        (option) => option.bid !== undefined && option.ask !== undefined
+      ).length;
+
+      setNotice(
+        `Liquidez atualizada. Volume: ${volumeCoverage}/${refreshed.length}; negócios: ${tradesCoverage}/${refreshed.length}; bid/ask: ${bidAskCoverage}/${refreshed.length}.`
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Não foi possível atualizar a liquidez."
+      );
+    } finally {
+      setLoadingLiquidity(false);
+    }
+  };
+
+  const chartData = useMemo<SmileChartItem[]>(
     () =>
-      options
-        .filter((option) => option.impliedVolatility !== null)
-        .map((option) => ({
+      options.map((option) => {
+        const bid = option.bid ?? null;
+        const ask = option.ask ?? null;
+        const volume = option.volume ?? null;
+        const trades = option.trades ?? null;
+        const { spread, spreadPercent } = calculateSpreadData(
+          option.bid,
+          option.ask
+        );
+
+        return {
           strike: option.strike,
           optionCode: option.optionCode,
-          impliedVolatility: (option.impliedVolatility || 0) * 100,
+          impliedVolatility:
+            option.impliedVolatility === null
+              ? null
+              : option.impliedVolatility * 100,
           marketPrice: option.marketPrice,
           theoreticalPrice: option.theoreticalPrice,
-          bid: option.bid,
-          ask: option.ask,
-          volume: option.volume,
-          trades: option.trades,
-        })),
+          bid,
+          ask,
+          spread,
+          spreadPercent,
+          volume,
+          trades,
+          averageVolumePerTrade:
+            volume !== null && trades !== null && trades > 0
+              ? volume / trades
+              : null,
+          financialVolume: option.financialVolume ?? null,
+          quoteUpdatedAt: option.quoteUpdatedAt ?? null,
+        };
+      }),
     [options]
   );
+
+  const volatilityChartData = useMemo(
+    () => chartData.filter((item) => item.impliedVolatility !== null),
+    [chartData]
+  );
+  const liquidityChartData = useMemo(
+    () =>
+      chartData.filter(
+        (item) => item.volume !== null || item.trades !== null
+      ),
+    [chartData]
+  );
+  const spreadChartData = useMemo(
+    () => chartData.filter((item) => item.spreadPercent !== null),
+    [chartData]
+  );
+  const curveSpotPrice = options[0]?.spotPrice;
+  const liquiditySummary = useMemo(() => {
+    const total = chartData.length;
+    const totalVolume = chartData.reduce(
+      (sum, item) => sum + (item.volume ?? 0),
+      0
+    );
+    const totalTrades = chartData.reduce(
+      (sum, item) => sum + (item.trades ?? 0),
+      0
+    );
+    const maxVolume = chartData.reduce<SmileChartItem | null>(
+      (best, item) =>
+        item.volume !== null && (!best || item.volume > (best.volume ?? -1))
+          ? item
+          : best,
+      null
+    );
+    const maxTrades = chartData.reduce<SmileChartItem | null>(
+      (best, item) =>
+        item.trades !== null && (!best || item.trades > (best.trades ?? -1))
+          ? item
+          : best,
+      null
+    );
+
+    return {
+      total,
+      totalVolume,
+      totalTrades,
+      averageVolumePerTrade:
+        totalTrades > 0 ? totalVolume / totalTrades : null,
+      maxVolume,
+      maxTrades,
+      volumeCoverage: chartData.filter((item) => item.volume !== null).length,
+      tradesCoverage: chartData.filter((item) => item.trades !== null).length,
+      bidAskCoverage: chartData.filter(
+        (item) => item.bid !== null && item.ask !== null
+      ).length,
+    };
+  }, [chartData]);
 
   const styles: Record<string, CSSProperties> = {
     page: {
@@ -2077,6 +2382,18 @@ export default function VolatilitySmilePage() {
               >
                 Recalcular
               </button>
+
+              <button
+                type="button"
+                style={{
+                  ...styles.secondaryButton,
+                  opacity: options.length && !loadingLiquidity ? 1 : 0.5,
+                }}
+                disabled={!options.length || loadingLiquidity}
+                onClick={handleRefreshLiquidity}
+              >
+                {loadingLiquidity ? "Atualizando..." : "Atualizar liquidez"}
+              </button>
             </div>
           </form>
 
@@ -2181,7 +2498,7 @@ export default function VolatilitySmilePage() {
           <div style={{ width: "100%", height: 350 }}>
             <ResponsiveContainer>
               <LineChart
-                data={chartData}
+                data={volatilityChartData}
                 margin={{ top: 10, right: 24, left: 10, bottom: 15 }}
               >
                 <CartesianGrid strokeDasharray="3 3" />
@@ -2273,6 +2590,90 @@ export default function VolatilitySmilePage() {
         </section>
 
         <section style={styles.card}>
+          <h2 style={{ margin: "0 0 10px" }}>Resumo de liquidez</h2>
+          <div style={styles.grid}>
+            {[
+              ["Volume total", formatOptionalNumber(liquiditySummary.totalVolume)],
+              ["Total de negócios", formatOptionalNumber(liquiditySummary.totalTrades)],
+              ["Média por negócio", formatOptionalNumber(liquiditySummary.averageVolumePerTrade)],
+              ["Maior volume", liquiditySummary.maxVolume ? `${liquiditySummary.maxVolume.optionCode} (${formatOptionalNumber(liquiditySummary.maxVolume.volume)})` : "—"],
+              ["Mais negócios", liquiditySummary.maxTrades ? `${liquiditySummary.maxTrades.optionCode} (${formatOptionalNumber(liquiditySummary.maxTrades.trades)})` : "—"],
+              ["Cobertura de volume", `${liquiditySummary.volumeCoverage}/${liquiditySummary.total}`],
+              ["Cobertura de negócios", `${liquiditySummary.tradesCoverage}/${liquiditySummary.total}`],
+              ["Cobertura de bid/ask", `${liquiditySummary.bidAskCoverage}/${liquiditySummary.total}`],
+            ].map(([label, value]) => (
+              <div key={label} style={{ padding: 10, border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                <div style={{ color: "#64748b", fontSize: 12, fontWeight: 700 }}>{label}</div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section style={styles.card}>
+          <h2 style={{ margin: "0 0 10px" }}>Atividade e liquidez por strike</h2>
+          {liquidityChartData.length ? (
+            <div style={{ width: "100%", height: 330 }}>
+              <ResponsiveContainer>
+                <ComposedChart data={liquidityChartData} margin={{ top: 10, right: 24, left: 10, bottom: 15 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="strike" type="number" domain={["dataMin", "dataMax"]} tickFormatter={(value) => Number(value).toFixed(2)} />
+                  <YAxis yAxisId="volume" orientation="left" allowDecimals={false} />
+                  <YAxis yAxisId="trades" orientation="right" allowDecimals={false} />
+                  <Tooltip content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const item = payload[0].payload as SmileChartItem;
+                    return <div style={{ background: "#fff", border: "1px solid #cbd5e1", padding: 10, color: "#111827" }}>
+                      <div><strong>{item.optionCode}</strong></div>
+                      <div>Strike: {formatCurrency(item.strike)}</div>
+                      <div>Volume: {formatOptionalNumber(item.volume)}</div>
+                      <div>Quantidade de negócios: {formatOptionalNumber(item.trades)}</div>
+                      <div>Média por negócio: {formatOptionalNumber(item.averageVolumePerTrade)}</div>
+                      <div>Último preço: {formatCurrency(item.marketPrice)}</div>
+                      <div>Bid: {formatOptionalCurrency(item.bid)}</div>
+                      <div>Ask: {formatOptionalCurrency(item.ask)}</div>
+                      <div>Spread: {formatOptionalCurrency(item.spread)}</div>
+                      <div>Spread percentual: {item.spreadPercent === null ? "—" : `${item.spreadPercent.toFixed(2)}%`}</div>
+                      <div>Volume financeiro: {formatOptionalCurrency(item.financialVolume)}</div>
+                      <div>Última atualização: {formatDateTime(item.quoteUpdatedAt)}</div>
+                    </div>;
+                  }} />
+                  <Legend />
+                  <Bar yAxisId="volume" dataKey="volume" name="Volume negociado" barSize={40} />
+                  {liquidityChartData.some((item) => item.trades !== null) && (
+                    <Line yAxisId="trades" type="monotone" dataKey="trades" name="Quantidade de negócios" strokeWidth={2} dot={{ r: 4 }} connectNulls={false} />
+                  )}
+                  {curveSpotPrice !== undefined && <ReferenceLine x={curveSpotPrice} yAxisId="volume" strokeDasharray="5 5" label={`Ativo ${curveSpotPrice.toFixed(2)}`} />}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p style={{ color: "#64748b" }}>A API não retornou volume ou quantidade de negócios para os contratos exibidos.</p>
+          )}
+        </section>
+
+        <section style={styles.card}>
+          <h2 style={{ margin: "0 0 10px" }}>Spread do book por strike</h2>
+          {spreadChartData.length ? (
+            <div style={{ width: "100%", height: 330 }}>
+              <ResponsiveContainer>
+                <LineChart data={spreadChartData} margin={{ top: 10, right: 24, left: 10, bottom: 15 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="strike" type="number" domain={["dataMin", "dataMax"]} tickFormatter={(value) => Number(value).toFixed(2)} />
+                  <YAxis tickFormatter={(value) => `${Number(value).toFixed(2)}%`} />
+                  <Tooltip formatter={(value) => [`${Number(value).toFixed(2)}%`, "Spread percentual"]} labelFormatter={(value, payload) => `${payload?.[0]?.payload?.optionCode || ""} — Strike ${Number(value).toFixed(2)}`} />
+                  <Legend />
+                  <Line type="monotone" dataKey="spreadPercent" name="Spread percentual" strokeWidth={2} dot={{ r: 4 }} connectNulls={false} />
+                  {curveSpotPrice !== undefined && <ReferenceLine x={curveSpotPrice} strokeDasharray="5 5" label={`Ativo ${curveSpotPrice.toFixed(2)}`} />}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p style={{ color: "#64748b" }}>A API não retornou bid e ask suficientes para calcular o spread.</p>
+          )}
+        </section>
+
+        <section style={styles.card}>
           <h2 style={{ margin: "0 0 4px" }}>Opções analisadas</h2>
           <p
             style={{
@@ -2289,7 +2690,7 @@ export default function VolatilitySmilePage() {
             <table
               style={{
                 width: "100%",
-                minWidth: 1120,
+                minWidth: 1680,
                 borderCollapse: "collapse",
               }}
             >
@@ -2300,15 +2701,19 @@ export default function VolatilitySmilePage() {
                     "Tipo",
                     "Strike",
                     "Mercado (editável)",
-                    "Bid",
-                    "Ask",
-                    "Volume",
-                    "Negócios",
                     "Teórico",
                     "Diferença",
                     "IV",
+                    "Bid",
+                    "Ask",
+                    "Spread",
+                    "Volume",
+                    "Volume financeiro",
+                    "Negócios",
+                    "Média por negócio",
+                    "Atualização",
                     "Origem",
-                    "",
+                    "Ações",
                   ].map((column) => (
                     <th
                       key={column}
@@ -2326,7 +2731,16 @@ export default function VolatilitySmilePage() {
               </thead>
 
               <tbody>
-                {options.map((option) => (
+                {options.map((option) => {
+                  const spreadData = calculateSpreadData(option.bid, option.ask);
+                  const averageVolumePerTrade =
+                    option.volume !== undefined &&
+                    option.trades !== undefined &&
+                    option.trades > 0
+                      ? option.volume / option.trades
+                      : null;
+
+                  return (
                   <tr key={option.id}>
                     <td style={{ padding: 10 }}>{option.optionCode}</td>
                     <td style={{ padding: 10 }}>
@@ -2354,18 +2768,6 @@ export default function VolatilitySmilePage() {
                       />
                     </td>
                     <td style={{ padding: 10 }}>
-                      {option.bid !== undefined ? formatCurrency(option.bid) : "—"}
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      {option.ask !== undefined ? formatCurrency(option.ask) : "—"}
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      {formatNumber(option.volume)}
-                    </td>
-                    <td style={{ padding: 10 }}>
-                      {formatNumber(option.trades)}
-                    </td>
-                    <td style={{ padding: 10 }}>
                       {formatCurrency(option.theoreticalPrice)}
                     </td>
                     <td style={{ padding: 10 }}>
@@ -2375,6 +2777,32 @@ export default function VolatilitySmilePage() {
                     </td>
                     <td style={{ padding: 10 }}>
                       {formatPercent(option.impliedVolatility)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatOptionalCurrency(option.bid)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatOptionalCurrency(option.ask)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {spreadData.spread === null
+                        ? "—"
+                        : `${formatCurrency(spreadData.spread)} (${spreadData.spreadPercent?.toFixed(2)}%)`}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatNumber(option.volume)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatOptionalCurrency(option.financialVolume)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatNumber(option.trades)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatOptionalNumber(averageVolumePerTrade)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatDateTime(option.quoteUpdatedAt)}
                     </td>
                     <td style={{ padding: 10 }}>
                       {option.source === "automatic" ? "Automática" : "Manual"}
@@ -2398,12 +2826,13 @@ export default function VolatilitySmilePage() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
 
                 {!options.length && (
                   <tr>
                     <td
-                      colSpan={13}
+                      colSpan={17}
                       style={{
                         padding: 24,
                         textAlign: "center",
