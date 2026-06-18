@@ -41,6 +41,8 @@ type OptionChainItem = {
   lastPrice?: number;
   bid?: number;
   ask?: number;
+  volume?: number;
+  trades?: number;
   raw: unknown;
 };
 
@@ -52,6 +54,10 @@ type ResolvedOption = {
   expirationDate: string;
   marketPrice: number;
   spotPrice: number;
+  bid?: number;
+  ask?: number;
+  volume?: number;
+  trades?: number;
 };
 
 type OptionDraft = {
@@ -349,6 +355,29 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "venda",
   ];
 
+  const volumeKeys = [
+    "volume",
+    "regularMarketVolume",
+    "regular_market_volume",
+    "volumeNegociado",
+    "volume_negociado",
+    "qtdNegociada",
+    "quantidadeNegociada",
+  ];
+
+  const tradesKeys = [
+    "trades",
+    "tradeCount",
+    "trade_count",
+    "numberOfTrades",
+    "number_of_trades",
+    "negocios",
+    "negócios",
+    "numeroNegocios",
+    "numero_negocios",
+    "qtdNegocios",
+  ];
+
   return {
     symbol,
     underlying: normalizeUnderlying(
@@ -401,6 +430,14 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     ask: toNumber(
       readFirst(rawOption, askKeys) ??
         readFirst(quote, askKeys)
+    ),
+    volume: toNumber(
+      readFirst(rawOption, volumeKeys) ??
+        readFirst(quote, volumeKeys)
+    ),
+    trades: toNumber(
+      readFirst(rawOption, tradesKeys) ??
+        readFirst(quote, tradesKeys)
     ),
     raw: rawOption,
   };
@@ -571,10 +608,10 @@ function findOptionInChain(
   return prefixMatches[0];
 }
 
-async function getFreshPremium(
+async function getFreshOptionMarketData(
   optionCode: string,
   debug?: DebugLogger
-): Promise<number | undefined> {
+): Promise<OptionChainItem | undefined> {
   const cleanCode = optionCode.trim().toUpperCase();
 
   debug?.({
@@ -612,8 +649,17 @@ async function getFreshPremium(
       },
     });
 
+    if (normalized) {
+      return normalized;
+    }
+
     return price !== undefined && price > 0
-      ? price
+      ? {
+          symbol: cleanCode,
+          type: inferOptionType(cleanCode),
+          lastPrice: price,
+          raw: response,
+        }
       : undefined;
   } catch (error) {
     debug?.({
@@ -802,6 +848,8 @@ async function resolveOptionByCode(
             lastPrice: item.lastPrice,
             bid: item.bid,
             ask: item.ask,
+            volume: item.volume,
+            trades: item.trades,
           })),
         },
       });
@@ -842,10 +890,14 @@ async function resolveOptionByCode(
     ? getPremiumFromOption(metadata)
     : undefined;
 
+  let freshMarketData: OptionChainItem | undefined;
   let freshPremium: number | undefined;
 
   if (metadataPremium === undefined && chainPremium === undefined) {
-    freshPremium = await getFreshPremium(cleanCode, debug);
+    freshMarketData = await getFreshOptionMarketData(cleanCode, debug);
+    freshPremium = freshMarketData
+      ? getPremiumFromOption(freshMarketData)
+      : undefined;
   } else {
     debug?.({
       level: "success",
@@ -923,8 +975,10 @@ async function resolveOptionByCode(
     expirationDate:
       chainOption?.expirationDate || metadata?.expirationDate || "",
     lastPrice: premium,
-    bid: chainOption?.bid ?? metadata?.bid,
-    ask: chainOption?.ask ?? metadata?.ask,
+    bid: chainOption?.bid ?? metadata?.bid ?? freshMarketData?.bid,
+    ask: chainOption?.ask ?? metadata?.ask ?? freshMarketData?.ask,
+    volume: chainOption?.volume ?? metadata?.volume ?? freshMarketData?.volume,
+    trades: chainOption?.trades ?? metadata?.trades ?? freshMarketData?.trades,
     raw: {
       metadataResponse,
       chainOption: chainOption?.raw,
@@ -1239,6 +1293,14 @@ function draftToResolvedOption(draft: OptionDraft): ResolvedOption {
   };
 }
 
+function formatNumber(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+
+  return new Intl.NumberFormat("pt-BR", {
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -1304,6 +1366,10 @@ export default function VolatilitySmilePage() {
         strike: reference.strike,
         expirationDate: reference.expirationDate,
         lastPrice: reference.marketPrice,
+        bid: reference.bid,
+        ask: reference.ask,
+        volume: reference.volume,
+        trades: reference.trades,
         raw: reference,
       };
 
@@ -1366,12 +1432,16 @@ export default function VolatilitySmilePage() {
             normalizeCode(chainOption.symbol) ===
             normalizeCode(reference.optionCode);
 
-          const freshPremium = isReference
-            ? reference.marketPrice
-            : await getFreshPremium(chainOption.symbol, addDebug);
+          const freshMarketData = isReference
+            ? undefined
+            : await getFreshOptionMarketData(chainOption.symbol, addDebug);
+          const marketData = freshMarketData ?? chainOption;
 
           const marketPrice =
-            freshPremium ?? getPremiumFromOption(chainOption) ?? 0;
+            (isReference ? reference.marketPrice : undefined) ??
+            getPremiumFromOption(marketData) ??
+            getPremiumFromOption(chainOption) ??
+            0;
 
           const resolved: ResolvedOption = {
             optionCode: chainOption.symbol,
@@ -1387,6 +1457,10 @@ export default function VolatilitySmilePage() {
               reference.expirationDate,
             marketPrice,
             spotPrice: reference.spotPrice,
+            bid: marketData.bid ?? reference.bid,
+            ask: marketData.ask ?? reference.ask,
+            volume: marketData.volume ?? reference.volume,
+            trades: marketData.trades ?? reference.trades,
           };
 
           return calculateSmileOption(
@@ -1633,6 +1707,10 @@ export default function VolatilitySmilePage() {
             expirationDate: option.expirationDate,
             marketPrice,
             spotPrice: option.spotPrice,
+            bid: option.bid,
+            ask: option.ask,
+            volume: option.volume,
+            trades: option.trades,
           },
           volatility,
           option.source
@@ -1658,6 +1736,10 @@ export default function VolatilitySmilePage() {
             expirationDate: option.expirationDate,
             marketPrice: option.marketPrice,
             spotPrice: option.spotPrice,
+            bid: option.bid,
+            ask: option.ask,
+            volume: option.volume,
+            trades: option.trades,
           },
           volatility,
           option.source
@@ -1681,6 +1763,10 @@ export default function VolatilitySmilePage() {
           impliedVolatility: (option.impliedVolatility || 0) * 100,
           marketPrice: option.marketPrice,
           theoreticalPrice: option.theoreticalPrice,
+          bid: option.bid,
+          ask: option.ask,
+          volume: option.volume,
+          trades: option.trades,
         })),
     [options]
   );
@@ -2203,7 +2289,7 @@ export default function VolatilitySmilePage() {
             <table
               style={{
                 width: "100%",
-                minWidth: 850,
+                minWidth: 1120,
                 borderCollapse: "collapse",
               }}
             >
@@ -2214,6 +2300,10 @@ export default function VolatilitySmilePage() {
                     "Tipo",
                     "Strike",
                     "Mercado (editável)",
+                    "Bid",
+                    "Ask",
+                    "Volume",
+                    "Negócios",
                     "Teórico",
                     "Diferença",
                     "IV",
@@ -2264,6 +2354,18 @@ export default function VolatilitySmilePage() {
                       />
                     </td>
                     <td style={{ padding: 10 }}>
+                      {option.bid !== undefined ? formatCurrency(option.bid) : "—"}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {option.ask !== undefined ? formatCurrency(option.ask) : "—"}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatNumber(option.volume)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      {formatNumber(option.trades)}
+                    </td>
+                    <td style={{ padding: 10 }}>
                       {formatCurrency(option.theoreticalPrice)}
                     </td>
                     <td style={{ padding: 10 }}>
@@ -2301,7 +2403,7 @@ export default function VolatilitySmilePage() {
                 {!options.length && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={13}
                       style={{
                         padding: 24,
                         textAlign: "center",
