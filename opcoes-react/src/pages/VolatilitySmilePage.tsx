@@ -619,6 +619,24 @@ function normalizeOptionsPayload(payload: unknown): OptionChainItem[] {
   });
 }
 
+function uniqueOptionChainItems(options: OptionChainItem[]): OptionChainItem[] {
+  const map = new Map<string, OptionChainItem>();
+
+  for (const option of options) {
+    map.set(normalizeCode(option.symbol), option);
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    const dateCompare = String(a.expirationDate || "").localeCompare(
+      String(b.expirationDate || "")
+    );
+
+    if (dateCompare !== 0) return dateCompare;
+
+    return Number(a.strike || 0) - Number(b.strike || 0);
+  });
+}
+
 function getPremiumFromOption(option: OptionChainItem): number | undefined {
   if (option.lastPrice !== undefined && option.lastPrice > 0) {
     return option.lastPrice;
@@ -1332,6 +1350,171 @@ function chooseOptionsBySpacing(
   return selected.sort((a, b) => Number(a.strike) - Number(b.strike));
 }
 
+function parseOptionSymbolStrikePattern(
+  symbol: string,
+  strike: number
+): { prefix: string; scale: number; suffixLength: number } | null {
+  const match = normalizeCode(symbol).match(/^([A-Z]{4}[A-X])(\d+)$/);
+
+  if (!match || strike <= 0) return null;
+
+  const [, prefix, suffix] = match;
+  const numericSuffix = Number(suffix);
+
+  if (!Number.isFinite(numericSuffix) || numericSuffix <= 0) return null;
+
+  const scale = numericSuffix / strike;
+  const roundedScale = Math.round(scale);
+
+  if (!Number.isFinite(roundedScale) || roundedScale <= 0) return null;
+
+  return {
+    prefix,
+    scale: roundedScale,
+    suffixLength: suffix.length,
+  };
+}
+
+function buildOptionCodeFromStrike(
+  pattern: { prefix: string; scale: number; suffixLength: number },
+  strike: number
+): string | null {
+  if (strike <= 0) return null;
+
+  const scaledStrike = Math.round(strike * pattern.scale);
+
+  if (!Number.isFinite(scaledStrike) || scaledStrike <= 0) return null;
+
+  return `${pattern.prefix}${String(scaledStrike).padStart(
+    pattern.suffixLength,
+    "0"
+  )}`;
+}
+
+function buildExpectedOptionCodesBySpacing(
+  reference: ResolvedOption,
+  desiredSpacing: number,
+  amountBelow: number,
+  amountAbove: number
+): string[] {
+  const pattern = parseOptionSymbolStrikePattern(
+    reference.optionCode,
+    reference.strike
+  );
+
+  if (!pattern) return [];
+
+  const codes = new Set<string>();
+
+  for (let index = amountBelow; index >= 1; index -= 1) {
+    const code = buildOptionCodeFromStrike(
+      pattern,
+      reference.strike - desiredSpacing * index
+    );
+
+    if (code) codes.add(code);
+  }
+
+  const referenceCode = buildOptionCodeFromStrike(pattern, reference.strike);
+
+  if (referenceCode) codes.add(referenceCode);
+
+  for (let index = 1; index <= amountAbove; index += 1) {
+    const code = buildOptionCodeFromStrike(
+      pattern,
+      reference.strike + desiredSpacing * index
+    );
+
+    if (code) codes.add(code);
+  }
+
+  return Array.from(codes);
+}
+
+async function fetchGeneratedChainOptions(
+  reference: ResolvedOption,
+  desiredSpacing: number,
+  amountBelow: number,
+  amountAbove: number,
+  debug?: DebugLogger
+): Promise<OptionChainItem[]> {
+  const generatedCodes = buildExpectedOptionCodesBySpacing(
+    reference,
+    desiredSpacing,
+    amountBelow,
+    amountAbove
+  ).filter(
+    (code) => normalizeCode(code) !== normalizeCode(reference.optionCode)
+  );
+
+  if (!generatedCodes.length) return [];
+
+  debug?.({
+    level: "info",
+    step: "Curva — fallback por código",
+    message: `Tentando buscar ${generatedCodes.length} contrato(s) estimado(s) pela série e espaçamento.`,
+    data: { generatedCodes },
+  });
+
+  const fetched = await Promise.all(
+    generatedCodes.map(async (code): Promise<OptionChainItem | null> => {
+      try {
+        const response = await getOptionBySymbol(code);
+        const normalized = normalizeOption(unwrapObject(response));
+
+        if (!normalized) return null;
+
+        const optionType =
+          normalized.type === "unknown"
+            ? inferOptionType(normalized.symbol)
+            : normalized.type;
+
+        if (optionType !== reference.optionType) return null;
+
+        if (
+          normalized.expirationDate &&
+          reference.expirationDate &&
+          normalized.expirationDate !== reference.expirationDate
+        ) {
+          return null;
+        }
+
+        return {
+          ...normalized,
+          underlying: normalized.underlying || reference.underlying,
+          type: optionType,
+          expirationDate: normalized.expirationDate || reference.expirationDate,
+        };
+      } catch (error) {
+        debug?.({
+          level: "warning",
+          step: "Curva — fallback por código",
+          message: `Não foi possível buscar ${code}.`,
+          data: errorToDebugData(error),
+        });
+
+        return null;
+      }
+    })
+  );
+
+  const valid = fetched.filter((option): option is OptionChainItem =>
+    Boolean(option)
+  );
+
+  debug?.({
+    level: valid.length ? "success" : "warning",
+    step: "Curva — fallback por código",
+    message: `${valid.length} contrato(s) estimado(s) foram encontrados pela busca direta.`,
+    data: {
+      generatedCodes,
+      foundSymbols: valid.map((option) => option.symbol),
+    },
+  });
+
+  return valid;
+}
+
 function optionToDraft(
   option: OptionChainItem,
   premium: number | undefined,
@@ -1537,6 +1720,9 @@ export default function VolatilitySmilePage() {
         raw: reference,
       };
 
+      const spacing = Math.max(toNumber(desiredSpacing) || 0.5, 0.01);
+      const amountBelow = Math.max(Math.floor(toNumber(strikesBelow) || 0), 0);
+      const amountAbove = Math.max(Math.floor(toNumber(strikesAbove) || 0), 0);
       const compatibleChain = availableChain.filter((option) => {
         const type =
           option.type === "unknown"
@@ -1550,15 +1736,33 @@ export default function VolatilitySmilePage() {
         return option.expirationDate === reference.expirationDate;
       });
 
+      const fallbackChain =
+        compatibleChain.length > 1
+          ? []
+          : await fetchGeneratedChainOptions(
+              reference,
+              spacing,
+              amountBelow,
+              amountAbove,
+              addDebug
+            );
+
+      const expandedCompatibleChain = uniqueOptionChainItems([
+        ...compatibleChain,
+        ...fallbackChain,
+      ]);
+
       addDebug({
-        level: compatibleChain.length ? "success" : "warning",
+        level: expandedCompatibleChain.length ? "success" : "warning",
         step: "Curva — contratos compatíveis",
-        message: compatibleChain.length
-          ? `${compatibleChain.length} contrato(s) do mesmo tipo e vencimento foram encontrados.`
-          : "A cadeia não trouxe outros contratos do mesmo vencimento. A opção de referência será calculada sozinha.",
+        message: expandedCompatibleChain.length
+          ? `${expandedCompatibleChain.length} contrato(s) do mesmo tipo e vencimento foram encontrados.`
+          : "A cadeia e a busca direta não trouxeram outros contratos do mesmo vencimento. A opção de referência será calculada sozinha.",
         data: {
           reference: referenceContract,
-          compatibleSymbols: compatibleChain.map((option) => ({
+          chainSymbols: compatibleChain.map((option) => option.symbol),
+          fallbackSymbols: fallbackChain.map((option) => option.symbol),
+          compatibleSymbols: expandedCompatibleChain.map((option) => ({
             symbol: option.symbol,
             strike: option.strike,
             expirationDate: option.expirationDate,
@@ -1568,7 +1772,7 @@ export default function VolatilitySmilePage() {
 
       const candidateMap = new Map<string, OptionChainItem>();
 
-      for (const option of compatibleChain) {
+      for (const option of expandedCompatibleChain) {
         candidateMap.set(normalizeCode(option.symbol), option);
       }
 
@@ -1585,9 +1789,9 @@ export default function VolatilitySmilePage() {
           : chooseOptionsBySpacing(
               candidates,
               reference.strike,
-              Math.max(toNumber(desiredSpacing) || 0.5, 0.01),
-              Math.max(Math.floor(toNumber(strikesBelow) || 0), 0),
-              Math.max(Math.floor(toNumber(strikesAbove) || 0), 0)
+              spacing,
+              amountBelow,
+              amountAbove
             );
 
       const calculated = await Promise.all(
@@ -1657,11 +1861,17 @@ export default function VolatilitySmilePage() {
 
       setOptions(uniqueSmileOptions(valid));
 
-      if (!compatibleChain.length) {
+      if (!expandedCompatibleChain.length) {
         setNotice(
-          `A opção ${reference.optionCode} foi calculada, mas a cadeia da API não retornou outras opções de ${formatDisplayDate(
+          `A opção ${reference.optionCode} foi calculada, mas não encontrei outras opções de ${formatDisplayDate(
             reference.expirationDate
-          )}. Você pode adicioná-las pelo código na inclusão manual.`
+          )} na cadeia nem pela busca automática por códigos próximos. Você pode adicioná-las pelo código na inclusão manual.`
+        );
+      } else if (!compatibleChain.length && fallbackChain.length) {
+        setNotice(
+          `A cadeia da API não retornou o vencimento ${formatDisplayDate(
+            reference.expirationDate
+          )}, então busquei automaticamente opções próximas pelo código da série.`
         );
       } else if (valid.length < selected.length) {
         setNotice(
