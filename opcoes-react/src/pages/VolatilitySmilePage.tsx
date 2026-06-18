@@ -150,6 +150,14 @@ function isRecord(value: unknown): value is ApiRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeFieldName(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toLowerCase();
+}
+
 function readFirst(record: ApiRecord, keys: string[]): unknown {
   for (const key of keys) {
     const value = record[key];
@@ -157,6 +165,29 @@ function readFirst(record: ApiRecord, keys: string[]): unknown {
     if (value !== undefined && value !== null && value !== "") {
       return value;
     }
+  }
+
+  const normalizedKeys = new Set(keys.map(normalizeFieldName));
+
+  for (const [key, value] of Object.entries(record)) {
+    if (
+      normalizedKeys.has(normalizeFieldName(key)) &&
+      value !== undefined &&
+      value !== null &&
+      value !== ""
+    ) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readFirstFromRecords(records: ApiRecord[], keys: string[]): unknown {
+  for (const record of records) {
+    const value = readFirst(record, keys);
+
+    if (value !== undefined) return value;
   }
 
   return undefined;
@@ -197,8 +228,24 @@ function unwrapObject(raw: unknown): ApiRecord {
    */
   if (hasOptionIdentity(raw)) return raw;
 
-  if (isRecord(raw.data)) return unwrapObject(raw.data);
-  if (isRecord(raw.option)) return unwrapObject(raw.option);
+  if (isRecord(raw.data)) {
+    const unwrappedData = unwrapObject(raw.data);
+    const dataQuote = isRecord(raw.data.quote) ? raw.data.quote : undefined;
+
+    return dataQuote && !isRecord(unwrappedData.quote)
+      ? { ...unwrappedData, quote: dataQuote }
+      : unwrappedData;
+  }
+
+  if (isRecord(raw.option)) {
+    const unwrappedOption = unwrapObject(raw.option);
+    const siblingQuote = isRecord(raw.quote) ? raw.quote : undefined;
+
+    return siblingQuote && !isRecord(unwrappedOption.quote)
+      ? { ...unwrappedOption, quote: siblingQuote }
+      : unwrappedOption;
+  }
+
   if (isRecord(raw.result)) return unwrapObject(raw.result);
   if (isRecord(raw.quote)) return unwrapObject(raw.quote);
 
@@ -372,7 +419,12 @@ function inferOptionType(
 function normalizeOption(rawOption: unknown): OptionChainItem | null {
   if (!isRecord(rawOption)) return null;
 
+  const data = isRecord(rawOption.data) ? rawOption.data : {};
   const quote = isRecord(rawOption.quote) ? rawOption.quote : {};
+  const dataQuote = isRecord(data.quote) ? data.quote : {};
+  const marketData = isRecord(rawOption.marketData) ? rawOption.marketData : {};
+  const dataMarketData = isRecord(data.marketData) ? data.marketData : {};
+  const quoteRecords = [quote, dataQuote, marketData, dataMarketData];
 
   const symbol = toText(
     readFirst(rawOption, [
@@ -419,6 +471,12 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "bidPrice",
     "bid_price",
     "compra",
+    "precoCompra",
+    "preco_compra",
+    "ofertaCompra",
+    "oferta_compra",
+    "bestBid",
+    "best_bid",
   ];
 
   const askKeys = [
@@ -426,6 +484,12 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "askPrice",
     "ask_price",
     "venda",
+    "precoVenda",
+    "preco_venda",
+    "ofertaVenda",
+    "oferta_venda",
+    "bestAsk",
+    "best_ask",
   ];
 
   const volumeKeys = [
@@ -436,6 +500,9 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "volume_negociado",
     "qtdNegociada",
     "quantidadeNegociada",
+    "quantidade_negociada",
+    "qtdVolume",
+    "qtd_volume",
   ];
 
   const financialVolumeKeys = [
@@ -458,6 +525,13 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     "numero_negocios",
     "qtdNegocios",
     "quantidadeNegocios",
+    "quantidade_negocios",
+    "numeroDeNegocios",
+    "numero_de_negocios",
+    "numNegocios",
+    "num_negocios",
+    "qtdTrades",
+    "qtd_trades",
     "transactions",
     "deals",
     "businesses",
@@ -522,27 +596,27 @@ function normalizeOption(rawOption: unknown): OptionChainItem | null {
     ),
     bid: toNumber(
       readFirst(rawOption, bidKeys) ??
-        readFirst(quote, bidKeys)
+        readFirstFromRecords(quoteRecords, bidKeys)
     ),
     ask: toNumber(
       readFirst(rawOption, askKeys) ??
-        readFirst(quote, askKeys)
+        readFirstFromRecords(quoteRecords, askKeys)
     ),
     volume: toCount(
       readFirst(rawOption, volumeKeys) ??
-        readFirst(quote, volumeKeys)
+        readFirstFromRecords(quoteRecords, volumeKeys)
     ),
     financialVolume: toNumber(
       readFirst(rawOption, financialVolumeKeys) ??
-        readFirst(quote, financialVolumeKeys)
+        readFirstFromRecords(quoteRecords, financialVolumeKeys)
     ),
     trades: toCount(
       readFirst(rawOption, tradesKeys) ??
-        readFirst(quote, tradesKeys)
+        readFirstFromRecords(quoteRecords, tradesKeys)
     ),
     quoteUpdatedAt: normalizeTimestamp(
       readFirst(rawOption, quoteUpdatedAtKeys) ??
-        readFirst(quote, quoteUpdatedAtKeys)
+        readFirstFromRecords(quoteRecords, quoteUpdatedAtKeys)
     ),
     raw: rawOption,
   };
