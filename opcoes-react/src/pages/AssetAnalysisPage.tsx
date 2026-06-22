@@ -37,6 +37,8 @@ import "../styles/asset-analysis.css";
 type Period = "week" | "month" | "year";
 type AnalysisKind = "asset" | "option";
 
+const WEEKLY_BUY_VOLUME_PRICE_BUCKET = 0.1;
+
 type ApiRecord = Record<string, unknown>;
 
 type VolatilityPoint = {
