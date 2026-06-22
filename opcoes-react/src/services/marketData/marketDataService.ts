@@ -106,6 +106,14 @@ function normalizeQuote(raw: unknown, fallbackSymbol: string): Quote | null {
   return {
     symbol: String(data.symbol ?? fallbackSymbol).toUpperCase(),
     price,
+    bid:
+      toNumber(data.bid) ??
+      toNumber(data.bidPrice) ??
+      toNumber(data.regularMarketBid),
+    ask:
+      toNumber(data.ask) ??
+      toNumber(data.askPrice) ??
+      toNumber(data.regularMarketAsk),
     change:
       toNumber(data.change) ??
       toNumber(data.dailyChange) ??
