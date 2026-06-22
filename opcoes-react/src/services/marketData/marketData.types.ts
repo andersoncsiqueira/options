@@ -1,6 +1,8 @@
 export type Quote = {
   symbol: string;
   price: number;
+  bid?: number;
+  ask?: number;
   change?: number;
   changePercent?: number;
   updatedAt?: string;

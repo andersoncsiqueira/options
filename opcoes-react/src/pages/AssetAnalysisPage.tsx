@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   Legend,
   Line,
@@ -35,12 +37,20 @@ import "../styles/asset-analysis.css";
 type Period = "week" | "month" | "year";
 type AnalysisKind = "asset" | "option";
 
+const WEEKLY_BUY_VOLUME_PRICE_BUCKET = 0.1;
+
 type ApiRecord = Record<string, unknown>;
 
 type VolatilityPoint = {
   date: string;
   volatilityPercent: number;
   volatilityFinancial: number;
+};
+
+type WeeklyVolumePricePoint = {
+  priceRange: string;
+  buyVolume: number;
+  averagePrice: number;
 };
 
 type ImportantDate = {
@@ -62,6 +72,7 @@ type AssetAnalytics = {
   annualizedVolatility: number;
   candles: HistoricalCandle[];
   volatilitySeries: VolatilityPoint[];
+  weeklyBuyVolumeByPrice: WeeklyVolumePricePoint[];
   importantDates: ImportantDate[];
 };
 
@@ -249,6 +260,14 @@ function normalizeOptionQuote(
   return {
     symbol: String(data.symbol ?? data.code ?? fallbackSymbol).toUpperCase(),
     price,
+    bid:
+      toNumber(data.bid) ??
+      toNumber(data.bidPrice) ??
+      toNumber(data.regularMarketBid),
+    ask:
+      toNumber(data.ask) ??
+      toNumber(data.askPrice) ??
+      toNumber(data.regularMarketAsk),
     change:
       toNumber(data.change) ??
       toNumber(data.dailyChange) ??
@@ -297,6 +316,51 @@ function normalizeOptionHistory(raw: unknown): HistoricalCandle[] {
   });
 
   return candles.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function calculateWeeklyBuyVolumeByPrice(
+  candles: HistoricalCandle[]
+): WeeklyVolumePricePoint[] {
+  const lastSevenCandles = candles.slice(-7);
+  const buckets = new Map<
+    number,
+    { buyVolume: number; totalPrice: number; count: number }
+  >();
+
+  lastSevenCandles.forEach((candle) => {
+    const volume = candle.volume ?? 0;
+
+    if (volume <= 0) return;
+
+    const positivePriceMove = candle.close >= candle.open;
+    const buyVolume = positivePriceMove ? volume : volume * 0.45;
+    const bucketPriceIndex = Math.floor(
+      candle.close / WEEKLY_BUY_VOLUME_PRICE_BUCKET
+    );
+    const bucket = buckets.get(bucketPriceIndex) ?? {
+      buyVolume: 0,
+      totalPrice: 0,
+      count: 0,
+    };
+
+    bucket.buyVolume += buyVolume;
+    bucket.totalPrice += candle.close;
+    bucket.count += 1;
+    buckets.set(bucketPriceIndex, bucket);
+  });
+
+  return Array.from(buckets.entries())
+    .sort(([priceA], [priceB]) => priceA - priceB)
+    .map(([priceIndex, bucket]) => {
+      const price = priceIndex * WEEKLY_BUY_VOLUME_PRICE_BUCKET;
+      const nextPrice = price + WEEKLY_BUY_VOLUME_PRICE_BUCKET;
+
+      return {
+        priceRange: `${formatCurrency(price)} - ${formatCurrency(nextPrice)}`,
+        buyVolume: Math.round(bucket.buyVolume),
+        averagePrice: Number((bucket.totalPrice / bucket.count).toFixed(2)),
+      };
+    });
 }
 
 function generateImportantDates(
@@ -404,8 +468,8 @@ async function getAssetAnalytics(
   const range = getHistoryRangeByPeriod(period);
   const kind = detectAnalysisKind(cleanSymbol);
 
-  let quote: Quote | null = null;
-  let candles: HistoricalCandle[] = [];
+  let quote: Quote | null;
+  let candles: HistoricalCandle[];
 
   if (kind === "option") {
     const [optionQuoteRaw, optionHistoryRaw] = await Promise.all([
@@ -443,6 +507,8 @@ async function getAssetAnalytics(
 
   const annualizedVolatility = calculateAnnualizedVolatility(candles);
   const volatilitySeries = calculateVolatilitySeries(candles, 21);
+  const weeklyBuyVolumeByPrice =
+    kind === "asset" ? calculateWeeklyBuyVolumeByPrice(candles) : [];
 
   return {
     symbol: cleanSymbol,
@@ -455,6 +521,7 @@ async function getAssetAnalytics(
     annualizedVolatility,
     candles,
     volatilitySeries,
+    weeklyBuyVolumeByPrice,
     importantDates: generateImportantDates(cleanSymbol, kind),
   };
 }
@@ -488,7 +555,11 @@ export default function AssetAnalysisPage() {
   }
 
   useEffect(() => {
-    loadAssetData(symbol, period);
+    const timeoutId = window.setTimeout(() => {
+      void loadAssetData(symbol, period);
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, [symbol, period]);
 
   const periodVolatility = useMemo(() => {
@@ -598,6 +669,36 @@ export default function AssetAnalysisPage() {
                 </strong>
                 <small>Baseada no período selecionado</small>
               </article>
+
+              {analytics.kind === "asset" && (
+                <>
+                  <article className="asset-card asset-card-highlight">
+                    <span>Último preço</span>
+                    <strong>{formatCurrency(analytics.currentPrice)}</strong>
+                    <small>Cotação mais recente do ativo</small>
+                  </article>
+
+                  <article className="asset-card">
+                    <span>Bid</span>
+                    <strong>
+                      {analytics.quote?.bid !== undefined
+                        ? formatCurrency(analytics.quote.bid)
+                        : "—"}
+                    </strong>
+                    <small>Melhor oferta de compra</small>
+                  </article>
+
+                  <article className="asset-card">
+                    <span>Ask</span>
+                    <strong>
+                      {analytics.quote?.ask !== undefined
+                        ? formatCurrency(analytics.quote.ask)
+                        : "—"}
+                    </strong>
+                    <small>Melhor oferta de venda</small>
+                  </article>
+                </>
+              )}
             </section>
 
             <section className="asset-period-card">
@@ -689,6 +790,58 @@ export default function AssetAnalysisPage() {
                 )}
               </div>
             </section>
+
+            {analytics.kind === "asset" && (
+              <section className="asset-chart-card asset-volume-card">
+                <div className="asset-chart-header">
+                  <div>
+                    <h2>Volume comprador por faixa de preço</h2>
+
+                    <p>
+                      Preços agrupados a cada R$ 0,10 com maior volume comprador
+                      estimado na última semana.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="asset-chart-wrapper">
+                  {analytics.weeklyBuyVolumeByPrice.length === 0 ? (
+                    <div className="asset-loading">
+                      Não há volume suficiente para montar o gráfico semanal.
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={340}>
+                      <BarChart data={analytics.weeklyBuyVolumeByPrice}>
+                        <CartesianGrid strokeDasharray="3 3" />
+
+                        <XAxis dataKey="priceRange" minTickGap={16} />
+
+                        <YAxis
+                          tickFormatter={(value) =>
+                            Number(value).toLocaleString("pt-BR", {
+                              notation: "compact",
+                            })
+                          }
+                        />
+
+                        <Tooltip
+                          formatter={(value, name) => [
+                            Number(value).toLocaleString("pt-BR"),
+                            name,
+                          ]}
+                        />
+
+                        <Bar
+                          dataKey="buyVolume"
+                          name="Volume comprador estimado"
+                          radius={[8, 8, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </section>
+            )}
 
             <section className="asset-chart-card">
               <div className="asset-chart-header">
