@@ -2830,9 +2830,12 @@ export default function VolatilitySmilePage() {
         </section>
 
         <section style={styles.card}>
-          <h2 style={{ margin: "0 0 10px" }}>
-            Preço de mercado × preço teórico
+          <h2 style={{ margin: "0 0 6px" }}>
+            Preço de mercado e preço teórico
           </h2>
+          <p style={{ margin: "0 0 10px", color: "#64748b", fontSize: 13 }}>
+            O gráfico compara os dois preços absolutos por strike; não exibe a diferença entre eles.
+          </p>
 
           <div style={{ width: "100%", height: 330 }}>
             <ResponsiveContainer>
@@ -2856,10 +2859,16 @@ export default function VolatilitySmilePage() {
 
                     return `${code} — Strike ${Number(value).toFixed(2)}`;
                   }}
-                  formatter={(value, name) => [
-                    formatCurrency(Number(value)),
-                    String(name),
-                  ]}
+                  formatter={(value, name) => {
+                    const label =
+                      name === "marketPrice"
+                        ? "Preço de mercado"
+                        : name === "theoreticalPrice"
+                          ? "Preço teórico"
+                          : String(name);
+
+                    return [formatCurrency(Number(value)), label];
+                  }}
                 />
                 <Legend />
                 <Line
