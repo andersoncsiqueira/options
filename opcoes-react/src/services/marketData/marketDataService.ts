@@ -22,6 +22,13 @@ function toNumber(value: unknown): number | undefined {
   return Number.isFinite(numberValue) ? numberValue : undefined;
 }
 
+function normalizeQuoteChangePercent(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+
+  // Mantemos o contrato em pontos percentuais: 0.86 significa 0,86%.
+  return Math.abs(value) <= 1 ? value * 100 : value;
+}
+
 function normalizeDate(value: unknown): string {
   if (typeof value === "number") {
     const timestamp = value < 1_000_000_000_000 ? value * 1000 : value;
@@ -118,10 +125,11 @@ function normalizeQuote(raw: unknown, fallbackSymbol: string): Quote | null {
       toNumber(data.change) ??
       toNumber(data.dailyChange) ??
       toNumber(data.regularMarketChange),
-    changePercent:
+    changePercent: normalizeQuoteChangePercent(
       toNumber(data.changePercent) ??
-      toNumber(data.dailyChangePercent) ??
-      toNumber(data.regularMarketChangePercent),
+        toNumber(data.dailyChangePercent) ??
+        toNumber(data.regularMarketChangePercent)
+    ),
     updatedAt:
       typeof data.updatedAt === "string"
         ? data.updatedAt

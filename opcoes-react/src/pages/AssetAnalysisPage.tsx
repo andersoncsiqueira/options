@@ -109,6 +109,18 @@ function formatPercent(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
+function normalizePercentValue(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+
+  // Algumas APIs retornam 0.86 para 0,86%, enquanto outras retornam
+  // 0.0086. A página exibe pontos percentuais, então normalizamos para 0.86.
+  if (Math.abs(value) <= 1) {
+    return value * 100;
+  }
+
+  return value;
+}
+
 function formatDate(date: string): string {
   return new Date(date + "T00:00:00").toLocaleDateString("pt-BR");
 }
@@ -490,7 +502,7 @@ async function getAssetAnalytics(
   const dailyChange = quote?.change ?? currentPrice - previousPrice;
 
   const dailyChangePercent =
-    quote?.changePercent ??
+    normalizePercentValue(quote?.changePercent) ??
     (previousPrice ? (dailyChange / previousPrice) * 100 : 0);
 
   const annualizedVolatility = calculateAnnualizedVolatility(candles);
