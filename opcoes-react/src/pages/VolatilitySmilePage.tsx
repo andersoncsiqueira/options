@@ -119,6 +119,13 @@ type SmileOption = ResolvedOption & {
 
 const DEFAULT_RISK_FREE_RATE = 0.145;
 
+const CHART_COLORS = {
+  impliedVolatility: "#7c3aed",
+  marketPrice: "#2563eb",
+  theoreticalPrice: "#f97316",
+  grid: "#e2e8f0",
+};
+
 const UNDERLYING_FALLBACKS: Record<string, string> = {
   PETR: "PETR4",
   VALE: "VALE3",
@@ -2785,7 +2792,7 @@ export default function VolatilitySmilePage() {
                 data={volatilityChartData}
                 margin={{ top: 10, right: 24, left: 10, bottom: 15 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
+                <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" />
                 <XAxis
                   dataKey="strike"
                   type="number"
@@ -2811,8 +2818,9 @@ export default function VolatilitySmilePage() {
                   type="monotone"
                   dataKey="impliedVolatility"
                   name="Volatilidade implícita"
-                  strokeWidth={2}
-                  dot={{ r: 5 }}
+                  stroke={CHART_COLORS.impliedVolatility}
+                  strokeWidth={2.5}
+                  dot={{ r: 5, fill: CHART_COLORS.impliedVolatility }}
                   activeDot={{ r: 7 }}
                   connectNulls
                 />
@@ -2832,7 +2840,7 @@ export default function VolatilitySmilePage() {
                 data={chartData}
                 margin={{ top: 10, right: 24, left: 10, bottom: 15 }}
               >
-                <CartesianGrid strokeDasharray="3 3" />
+                <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" />
                 <XAxis
                   dataKey="strike"
                   type="number"
@@ -2858,15 +2866,20 @@ export default function VolatilitySmilePage() {
                   type="monotone"
                   dataKey="marketPrice"
                   name="Preço de mercado"
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
+                  stroke={CHART_COLORS.marketPrice}
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: CHART_COLORS.marketPrice }}
+                  activeDot={{ r: 7 }}
                 />
                 <Line
                   type="monotone"
                   dataKey="theoreticalPrice"
                   name="Preço teórico"
-                  strokeWidth={2}
-                  dot={{ r: 4 }}
+                  stroke={CHART_COLORS.theoreticalPrice}
+                  strokeWidth={2.5}
+                  strokeDasharray="6 4"
+                  dot={{ r: 4, fill: CHART_COLORS.theoreticalPrice }}
+                  activeDot={{ r: 7 }}
                 />
               </LineChart>
             </ResponsiveContainer>
