@@ -111,6 +111,18 @@ function formatPercent(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
+function normalizePercentValue(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+
+  // Algumas APIs retornam 0.86 para 0,86%, enquanto outras retornam
+  // 0.0086. A página exibe pontos percentuais, então normalizamos para 0.86.
+  if (Math.abs(value) <= 1) {
+    return value * 100;
+  }
+
+  return value;
+}
+
 function formatDate(date: string): string {
   return new Date(date + "T00:00:00").toLocaleDateString("pt-BR");
 }
@@ -322,10 +334,7 @@ function calculateWeeklyBuyVolumeByPrice(
   candles: HistoricalCandle[]
 ): WeeklyVolumePricePoint[] {
   const lastSevenCandles = candles.slice(-7);
-  const buckets = new Map<
-    number,
-    { buyVolume: number; totalPrice: number; count: number }
-  >();
+  const buckets = new Map<number, { buyVolume: number; totalPrice: number; count: number }>();
 
   lastSevenCandles.forEach((candle) => {
     const volume = candle.volume ?? 0;
@@ -334,10 +343,8 @@ function calculateWeeklyBuyVolumeByPrice(
 
     const positivePriceMove = candle.close >= candle.open;
     const buyVolume = positivePriceMove ? volume : volume * 0.45;
-    const bucketPriceIndex = Math.floor(
-      candle.close / WEEKLY_BUY_VOLUME_PRICE_BUCKET
-    );
-    const bucket = buckets.get(bucketPriceIndex) ?? {
+    const bucketPrice = Math.floor(candle.close);
+    const bucket = buckets.get(bucketPrice) ?? {
       buyVolume: 0,
       totalPrice: 0,
       count: 0,
@@ -346,21 +353,16 @@ function calculateWeeklyBuyVolumeByPrice(
     bucket.buyVolume += buyVolume;
     bucket.totalPrice += candle.close;
     bucket.count += 1;
-    buckets.set(bucketPriceIndex, bucket);
+    buckets.set(bucketPrice, bucket);
   });
 
   return Array.from(buckets.entries())
     .sort(([priceA], [priceB]) => priceA - priceB)
-    .map(([priceIndex, bucket]) => {
-      const price = priceIndex * WEEKLY_BUY_VOLUME_PRICE_BUCKET;
-      const nextPrice = price + WEEKLY_BUY_VOLUME_PRICE_BUCKET;
-
-      return {
-        priceRange: `${formatCurrency(price)} - ${formatCurrency(nextPrice)}`,
-        buyVolume: Math.round(bucket.buyVolume),
-        averagePrice: Number((bucket.totalPrice / bucket.count).toFixed(2)),
-      };
-    });
+    .map(([price, bucket]) => ({
+      priceRange: `${formatCurrency(price)} - ${formatCurrency(price + 1)}`,
+      buyVolume: Math.round(bucket.buyVolume),
+      averagePrice: Number((bucket.totalPrice / bucket.count).toFixed(2)),
+    }));
 }
 
 function generateImportantDates(
@@ -502,7 +504,7 @@ async function getAssetAnalytics(
   const dailyChange = quote?.change ?? currentPrice - previousPrice;
 
   const dailyChangePercent =
-    quote?.changePercent ??
+    normalizePercentValue(quote?.changePercent) ??
     (previousPrice ? (dailyChange / previousPrice) * 100 : 0);
 
   const annualizedVolatility = calculateAnnualizedVolatility(candles);
@@ -798,7 +800,7 @@ export default function AssetAnalysisPage() {
                     <h2>Volume comprador por faixa de preço</h2>
 
                     <p>
-                      Preços agrupados a cada R$ 0,10 com maior volume comprador
+                      Preços agrupados a cada R$ 1 com maior volume comprador
                       estimado na última semana.
                     </p>
                   </div>
