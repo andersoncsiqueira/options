@@ -334,7 +334,10 @@ function calculateWeeklyBuyVolumeByPrice(
   candles: HistoricalCandle[]
 ): WeeklyVolumePricePoint[] {
   const lastSevenCandles = candles.slice(-7);
-  const buckets = new Map<number, { buyVolume: number; totalPrice: number; count: number }>();
+  const buckets = new Map<
+    number,
+    { buyVolume: number; totalPrice: number; count: number }
+  >();
 
   lastSevenCandles.forEach((candle) => {
     const volume = candle.volume ?? 0;
@@ -343,8 +346,8 @@ function calculateWeeklyBuyVolumeByPrice(
 
     const positivePriceMove = candle.close >= candle.open;
     const buyVolume = positivePriceMove ? volume : volume * 0.45;
-    const bucketPrice = Math.floor(candle.close);
-    const bucket = buckets.get(bucketPrice) ?? {
+    const bucketPriceInTenths = Math.floor(candle.close * 10);
+    const bucket = buckets.get(bucketPriceInTenths) ?? {
       buyVolume: 0,
       totalPrice: 0,
       count: 0,
@@ -353,16 +356,20 @@ function calculateWeeklyBuyVolumeByPrice(
     bucket.buyVolume += buyVolume;
     bucket.totalPrice += candle.close;
     bucket.count += 1;
-    buckets.set(bucketPrice, bucket);
+    buckets.set(bucketPriceInTenths, bucket);
   });
 
   return Array.from(buckets.entries())
     .sort(([priceA], [priceB]) => priceA - priceB)
-    .map(([price, bucket]) => ({
-      priceRange: `${formatCurrency(price)} - ${formatCurrency(price + 1)}`,
-      buyVolume: Math.round(bucket.buyVolume),
-      averagePrice: Number((bucket.totalPrice / bucket.count).toFixed(2)),
-    }));
+    .map(([priceInTenths, bucket]) => {
+      const price = priceInTenths / 10;
+
+      return {
+        priceRange: `${formatCurrency(price)} - ${formatCurrency(price + 0.1)}`,
+        buyVolume: Math.round(bucket.buyVolume),
+        averagePrice: Number((bucket.totalPrice / bucket.count).toFixed(2)),
+      };
+    });
 }
 
 function generateImportantDates(
@@ -800,7 +807,7 @@ export default function AssetAnalysisPage() {
                     <h2>Volume comprador por faixa de preço</h2>
 
                     <p>
-                      Preços agrupados a cada R$ 1 com maior volume comprador
+                      Preços agrupados a cada R$ 0,10 com maior volume comprador
                       estimado na última semana.
                     </p>
                   </div>
